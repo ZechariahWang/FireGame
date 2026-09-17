@@ -3,7 +3,6 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local TweenService = game:GetService("TweenService")
 local SoundService = game:GetService("SoundService")
-local UserInputService = game:GetService("UserInputService")
 
 local Constants = require(ReplicatedStorage.Shared.Constants)
 local FireAttackController = require(script.Parent.FireAttackController)
@@ -93,10 +92,8 @@ local burnerModeActive = false
 local currentPhase: string = Constants.PHASE_LOBBY
 
 local function shouldBurnerModeBeActive(): boolean
-	-- Burner mode is the first-person camera lock + custom crosshair. It is
-	-- deliberately deferred until after PHASE_ROLE_REVEAL so locking the camera
-	-- doesn't spoil the role-reveal animation. It's also off in lobby/end so the
-	-- player can scroll their camera around while waiting.
+	-- Burner mode is the custom crosshair. It is deferred until after
+	-- PHASE_ROLE_REVEAL so it doesn't spoil the role-reveal animation.
 	if not isBurner then return false end
 	return currentPhase == Constants.PHASE_REVEAL or currentPhase == Constants.PHASE_ROUND
 end
@@ -116,8 +113,6 @@ end
 
 local function setBurnerMode(active: boolean)
 	if active then
-		localPlayer.CameraMode = Enum.CameraMode.LockFirstPerson
-		UserInputService.MouseIconEnabled = false
 		if crosshair then
 			crosshair.Size = CROSSHAIR_IDLE_SIZE
 			crosshair.BackgroundColor3 = CROSSHAIR_IDLE_COLOR
@@ -131,8 +126,6 @@ local function setBurnerMode(active: boolean)
 			applyCrosshairFiring(true)
 		end
 	else
-		localPlayer.CameraMode = Enum.CameraMode.Classic
-		UserInputService.MouseIconEnabled = true
 		if crosshair then
 			crosshair.Visible = false
 		end
