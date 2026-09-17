@@ -17,27 +17,13 @@ local lastSecondaryText = ""
 local currentPhase = Constants.PHASE_LOBBY
 local phaseEndTime = 0
 local endExtra: any = nil
-local currentStage = 0
 local playerStates: { [Player]: string } = {}
 
 local WHITE = Color3.fromRGB(240, 240, 240)
 local YELLOW = Color3.fromRGB(255, 159, 80)
-local ORANGE = Color3.fromRGB(240, 90, 3)
 local RED = Color3.fromRGB(255, 25, 0)
 local GREEN = Color3.fromRGB(80, 220, 80)
 local CYAN = Color3.fromRGB(120, 220, 255)
-
-local STAGE_COLORS: { [number]: Color3 } = {
-	[1] = YELLOW,
-	[2] = ORANGE,
-	[3] = RED,
-}
-
-local STAGE_DESCRIPTIONS: { [number]: string } = {
-	[1] = "TAG",
-	[2] = "TRAILS",
-	[3] = "INFERNO",
-}
 
 local function colorize(color: Color3, text: string): string
 	return string.format(
@@ -71,20 +57,10 @@ local function buildMainText(): string
 		return colorize(WHITE, "WAITING FOR PLAYERS...")
 	elseif currentPhase == Constants.PHASE_INTERMISSION then
 		return colorize(YELLOW, "GET READY!")
-	elseif currentPhase == Constants.PHASE_ROLE_REVEAL then
-		return ""
 	elseif currentPhase == Constants.PHASE_REVEAL then
-		if endExtra and typeof(endExtra) == "table" and endExtra.burner then
-			return colorize(RED, string.upper(endExtra.burner) .. " IS BURNING!")
-		end
-		return colorize(RED, "BURNER REVEALED")
+		return colorize(YELLOW, "GET READY!")
 	elseif currentPhase == Constants.PHASE_ROUND then
-		if currentStage > 0 then
-			local stageColor = STAGE_COLORS[currentStage] or WHITE
-			local desc = STAGE_DESCRIPTIONS[currentStage] or ""
-			return colorize(stageColor, string.format("STAGE %d/%d — %s", currentStage, Constants.STAGE_COUNT, desc))
-		end
-		return colorize(WHITE, "BURN RUSH")
+		return colorize(WHITE, "LAST ONE STANDING")
 	elseif currentPhase == Constants.PHASE_END then
 		if endExtra and typeof(endExtra) == "table" then
 			local winners = endExtra.winners
@@ -96,8 +72,6 @@ local function buildMainText(): string
 				else
 					return colorize(GREEN, string.format("%d PLAYERS SURVIVED!", #winners))
 				end
-			elseif endExtra.reason == Constants.REASON_ALL_INFECTED then
-				return colorize(RED, "EVERYONE BURNED!")
 			end
 		end
 		return colorize(WHITE, "ROUND ENDED")
@@ -109,8 +83,6 @@ local function buildSecondaryText(): string
 	if currentPhase == Constants.PHASE_LOBBY then
 		local lobbyCount = countByState(Constants.STATE_LOBBY)
 		return colorize(WHITE, string.format("Players: %d / %d", lobbyCount, Constants.MIN_PLAYERS))
-	elseif currentPhase == Constants.PHASE_ROLE_REVEAL then
-		return ""
 	elseif currentPhase == Constants.PHASE_INTERMISSION then
 		if phaseEndTime > 0 then
 			local remaining = math.max(0, phaseEndTime - os.time())
@@ -132,8 +104,8 @@ local function buildSecondaryText(): string
 			table.insert(parts, colorize(color, formatTime(remaining)))
 		end
 		local safeCount = countByState(Constants.STATE_SAFE)
-		local totalCount = safeCount + countByState(Constants.STATE_BURNING)
-		table.insert(parts, colorize(WHITE, string.format("%d/%d", safeCount, totalCount-1))) -- dont include sekf
+		local totalCount = safeCount + countByState(Constants.STATE_LOBBY)
+		table.insert(parts, colorize(WHITE, string.format("%d/%d", safeCount, totalCount)))
 		return table.concat(parts, "  |  ")
 	elseif currentPhase == Constants.PHASE_END then
 		return ""
@@ -200,11 +172,6 @@ function UIController.init()
 		currentPhase = phase
 		phaseEndTime = if duration then os.time() + duration else 0
 		endExtra = extra
-		if phase == Constants.PHASE_ROUND and typeof(extra) == "table" and extra.stage then
-			currentStage = extra.stage
-		elseif phase ~= Constants.PHASE_ROUND then
-			currentStage = 0
-		end
 	end)
 
 	-- Seed every connected player as Lobby up-front. The server's initial

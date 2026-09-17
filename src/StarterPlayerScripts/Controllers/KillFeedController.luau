@@ -127,9 +127,9 @@ end
 
 local function formatKillText(killer: string?, victim: string): string
 	if killer and killer ~= "" then
-		return string.format("%s burned %s", killer, victim)
+		return string.format("%s shot %s", killer, victim)
 	end
-	return string.format("%s burned", victim)
+	return string.format("%s eliminated", victim)
 end
 
 function KillFeedController.init()

@@ -18,10 +18,7 @@ local lastDash = 0
 
 local function canDash(): boolean
 	if currentPhase ~= Constants.PHASE_ROUND then return false end
-	if localState ~= Constants.STATE_SAFE and localState ~= Constants.STATE_BURNING then
-		return false
-	end
-	return true
+	return localState == Constants.STATE_SAFE
 end
 
 local function tryDash()

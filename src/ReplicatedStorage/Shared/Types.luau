@@ -1,9 +1,9 @@
-export type PlayerStateName = "Lobby" | "Safe" | "Burning"
-export type RoundPhase = "Lobby" | "Intermission" | "Round" | "End"
-export type EndReason = "Survived" | "AllInfected" | "Aborted"
+export type PlayerStateName = "Lobby" | "Safe"
+export type RoundPhase = "Lobby" | "Intermission" | "Reveal" | "Round" | "End"
+export type EndReason = "Survived" | "LastStanding" | "Aborted"
 
 export type RoundEndExtra = {
-	winner: string?,
+	winners: { string },
 	reason: EndReason,
 }
 

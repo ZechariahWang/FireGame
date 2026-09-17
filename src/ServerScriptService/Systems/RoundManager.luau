@@ -3,9 +3,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Constants = require(ReplicatedStorage.Shared.Constants)
 local PlayerState = require(script.Parent.PlayerState)
-local InfectionSystem = require(script.Parent.InfectionSystem)
-local FireAttackSystem = require(script.Parent.FireAttackSystem)
-local FireSpreadSystem = require(script.Parent.FireSpreadSystem)
+local CombatSystem = require(script.Parent.CombatSystem)
 local AbilitySystem = require(script.Parent.AbilitySystem)
 local MapManager = require(script.Parent.MapManager)
 
@@ -14,7 +12,6 @@ local RoundManager = {}
 local currentPhase = Constants.PHASE_LOBBY
 local currentPhaseEndClock = 0
 local currentPhaseExtra: any = nil
-local currentStage = 0
 local RoundStateRemote: RemoteEvent
 local KillFeedRemote: RemoteEvent
 
@@ -41,63 +38,6 @@ local function setWalkSpeed(player: Player, speed: number)
 	if hum then hum.WalkSpeed = speed end
 end
 
-local function clearFire(char: Model)
-	for _, descendant in char:GetDescendants() do
-		if descendant.Name == "BurnFire" and descendant:IsA("Fire") then
-			descendant:Destroy()
-		end
-	end
-end
-
-local function applyFire(player: Player, on: boolean)
-	local char = player.Character
-	if not char then return end
-
-	if not on then
-		clearFire(char)
-		return
-	end
-
-	if char:FindFirstChild("BurnFire", true) then
-		return
-	end
-
-	local target = char:FindFirstChild("UpperTorso")
-		or char:FindFirstChild("Torso")
-		or char:FindFirstChild("HumanoidRootPart")
-	if not target then return end
-
-	local fire = Instance.new("Fire")
-	fire.Name = "BurnFire"
-	fire.Heat = 10
-	fire.Size = 6
-	fire.Color = Color3.fromRGB(255, 130, 0)
-	fire.SecondaryColor = Color3.fromRGB(255, 60, 0)
-	fire.Parent = target
-end
-
-local function applyOutline(player: Player, on: boolean)
-	local char = player.Character
-	if not char then return end
-
-	local existing = char:FindFirstChild("BurnOutline")
-	if existing then
-		existing:Destroy()
-	end
-
-	if not on then return end
-
-	local highlight = Instance.new("Highlight")
-	highlight.Name = "BurnOutline"
-	highlight.FillColor = Color3.fromRGB(255, 130, 0)
-	highlight.FillTransparency = 1
-	highlight.OutlineColor = Color3.fromRGB(255, 130, 0)
-	highlight.OutlineTransparency = 0
-	highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
-	highlight.Adornee = char
-	highlight.Parent = char
-end
-
 -- Read the grip CFrame and motor name from the third-person rig's Right-Arm motor.
 -- This lets the user author the grip in Studio (via the rig's pre-rigged weapon)
 -- and have it pick up automatically. Falls back to identity + "Weapon" if missing.
@@ -116,7 +56,7 @@ local function extractTPGrip(weaponName: string): (CFrame, string)
 	return CFrame.new(), "Weapon"
 end
 
--- Attach / detach the third-person weapon model on the burner's character.
+-- Attach / detach the third-person weapon model on the player's character.
 -- Server-side so the welded weapon replicates to every observer. The animation
 -- system targets the Motor6D by name (extracted from ThirdPersonRigs.<Name>),
 -- so the weapon follows the player's right arm via the TP fire/idle animations.
@@ -175,39 +115,16 @@ local function applyTPWeapon(player: Player, on: boolean)
 	clone.Parent = char
 end
 
--- withCosmetics gates both the outline AND the third-person welded weapon —
--- the two visuals that would identify the burner to other players. Defaults
--- true; the initial burner passes false during role-reveal so neither shows
--- up until the role-reveal UI fades out.
-local function setBurning(player: Player, withGrace: boolean, withCosmetics: boolean?)
-	PlayerState.set(player, Constants.STATE_BURNING)
-	InfectionSystem.markBurner(player, withGrace)
-	setWalkSpeed(player, Constants.BURNING_WALKSPEED)
-	if withCosmetics ~= false then
-		applyOutline(player, true)
-		applyTPWeapon(player, true)
-	end
-end
-
 local function setSafe(player: Player)
 	PlayerState.set(player, Constants.STATE_SAFE)
 	setWalkSpeed(player, Constants.SAFE_WALKSPEED)
-	applyFire(player, false)
-	applyOutline(player, false)
-	applyTPWeapon(player, false)
+	applyTPWeapon(player, true)
 end
 
 local function setLobby(player: Player)
 	PlayerState.set(player, Constants.STATE_LOBBY)
 	setWalkSpeed(player, Constants.SAFE_WALKSPEED)
-	applyFire(player, false)
-	applyOutline(player, false)
 	applyTPWeapon(player, false)
-end
-
-local function pickRandom(list: { Player }): Player?
-	if #list == 0 then return nil end
-	return list[math.random(1, #list)]
 end
 
 local function healAllPlayers()
@@ -221,23 +138,26 @@ local function healAllPlayers()
 	end
 end
 
+local function survivorNames(): { string }
+	local names: { string } = {}
+	for _, p in PlayerState.getAllInState(Constants.STATE_SAFE) do
+		table.insert(names, p.Name)
+	end
+	return names
+end
+
 local function endRound(reason: string, winners: { string })
-	-- Disable damage / abilities / tagging immediately. Clients gate fire+dash
-	-- on currentPhase being PHASE_ROUND, so broadcasting PHASE_END below also
-	-- shuts down the local viewmodel stream, burner first-person, etc.
-	FireAttackSystem.stop()
-	InfectionSystem.stop()
-	FireSpreadSystem.stop()
+	-- Stop combat first: it strips every PlayerShield, so the freeze ForceField
+	-- added below is the only one left on a character.
+	CombatSystem.stop()
 	AbilitySystem.stop()
 
 	for _, player in Players:GetPlayers() do
 		applyTPWeapon(player, false)
 	end
-	
-	currentStage = 0
 
 	-- Belt-and-suspenders invincibility for the freeze window in case any
-	-- in-flight damage tick lands after the systems stopped.
+	-- in-flight shot lands after the systems stopped.
 	for _, player in Players:GetPlayers() do
 		local char = player.Character
 		if char and not char:FindFirstChild("RoundEndForceField") then
@@ -262,7 +182,6 @@ local function endRound(reason: string, winners: { string })
 	for _, player in Players:GetPlayers() do
 		local char = player.Character
 		if char then
-			applyFire(player, false)
 			local ff = char:FindFirstChild("RoundEndForceField")
 			if ff then ff:Destroy() end
 		end
@@ -273,18 +192,6 @@ local function endRound(reason: string, winners: { string })
 	MapManager.unloadMap()
 
 	task.wait(Constants.END_TIME)
-end
-
-local function broadcastRoundStage(stage: number, remaining: number)
-	broadcastPhase(Constants.PHASE_ROUND, remaining, { stage = stage })
-end
-
-local function survivorNames(): { string }
-	local names: { string } = {}
-	for _, p in PlayerState.getAllInState(Constants.STATE_SAFE) do
-		table.insert(names, p.Name)
-	end
-	return names
 end
 
 local function runRound()
@@ -298,85 +205,46 @@ local function runRound()
 	end
 
 	if #participants < Constants.MIN_PLAYERS then
+		for _, player in participants do
+			setLobby(player)
+			MapManager.teleportToLobby(player)
+		end
+		MapManager.unloadMap()
 		broadcastPhase(Constants.PHASE_LOBBY)
 		return
 	end
 
-	local initialBurner = pickRandom(participants)
-	if not initialBurner then
-		broadcastPhase(Constants.PHASE_LOBBY)
-		return
-	end
-	-- Initial burner: no outline / no welded weapon yet — both would identify
-	-- the burner during the role-reveal animation and spoil the suspense.
-	-- Cosmetics are added once the role-reveal window closes.
-	setBurning(initialBurner, false, false)
-
-	broadcastPhase(Constants.PHASE_ROLE_REVEAL, Constants.ROLE_REVEAL_TIME, {
-		burner = initialBurner.Name,
-	})
-	task.wait(Constants.ROLE_REVEAL_TIME)
-
-	-- Role-reveal UI is gone now — show the visuals that reveal the burner.
-	applyOutline(initialBurner, true)
-	applyTPWeapon(initialBurner, true)
-
-	-- Reveal phase: positioning countdown. Damage and abilities still off.
-	broadcastPhase(Constants.PHASE_REVEAL, Constants.REVEAL_TIME, {
-		burner = initialBurner.Name,
-	})
+	-- Reveal phase: positioning countdown. Shooting, shields and dash stay off.
+	broadcastPhase(Constants.PHASE_REVEAL, Constants.REVEAL_TIME, nil)
 	task.wait(Constants.REVEAL_TIME)
 
-	local burningStill = PlayerState.countInState(Constants.STATE_BURNING)
-	local safeStill = PlayerState.countInState(Constants.STATE_SAFE)
-	if safeStill + burningStill < Constants.MIN_PLAYERS then
+	if PlayerState.countInState(Constants.STATE_SAFE) < Constants.MIN_PLAYERS then
 		endRound(Constants.REASON_ABORTED, {})
 		return
 	end
 
-	InfectionSystem.start()
-	FireSpreadSystem.start()
-	FireAttackSystem.start()
+	CombatSystem.start()
 	AbilitySystem.start()
 
-	local roundStart = os.clock()
-	local roundEnd = roundStart + Constants.ROUND_TIME
-
-	currentStage = 1
-	broadcastRoundStage(1, Constants.ROUND_TIME)
+	local roundEnd = os.clock() + Constants.ROUND_TIME
+	broadcastPhase(Constants.PHASE_ROUND, Constants.ROUND_TIME, nil)
 
 	while os.clock() < roundEnd do
 		task.wait(0.25)
 
-		local elapsed = os.clock() - roundStart
-		local nextStage = math.min(Constants.STAGE_COUNT, math.floor(elapsed / Constants.STAGE_DURATION) + 1)
-		if nextStage ~= currentStage then
-			currentStage = nextStage
-			FireSpreadSystem.setStage(currentStage)
-			broadcastRoundStage(currentStage, math.max(0, roundEnd - os.clock()))
-		end
-
-		local safeCount = PlayerState.countInState(Constants.STATE_SAFE)
-		local burningCount = PlayerState.countInState(Constants.STATE_BURNING)
-
-		if safeCount + burningCount < Constants.MIN_PLAYERS then
+		if #Players:GetPlayers() < Constants.MIN_PLAYERS then
 			endRound(Constants.REASON_ABORTED, {})
 			return
 		end
 
-		if safeCount == 0 then
-			endRound(Constants.REASON_ALL_INFECTED, {})
+		if PlayerState.countInState(Constants.STATE_SAFE) <= 1 then
+			endRound(Constants.REASON_LAST_STANDING, survivorNames())
 			return
 		end
 	end
 
-	-- Time up — every safe player is a winner.
-	local winners = survivorNames()
-	if #winners > 0 then
-		endRound(Constants.REASON_SURVIVED, winners)
-	else
-		endRound(Constants.REASON_ALL_INFECTED, {})
-	end
+	-- Time up: every remaining player is a winner.
+	endRound(Constants.REASON_SURVIVED, survivorNames())
 end
 
 local function gameLoop()
@@ -406,16 +274,14 @@ local function gameLoop()
 	end
 end
 
-local function onPlayerInfected(safe: Player, by: any)
+local function onPlayerEliminated(victim: Player, killer: Player?)
 	if currentPhase ~= Constants.PHASE_ROUND then return end
 
-	local killerName: string? = nil
-	if typeof(by) == "Instance" and by:IsA("Player") then
-		killerName = by.Name
-	end
-	KillFeedRemote:FireAllClients(killerName, safe.Name)
+	local killerName: string? = if killer then killer.Name else nil
+	KillFeedRemote:FireAllClients(killerName, victim.Name)
 
-	setBurning(safe, true)
+	setLobby(victim)
+	MapManager.teleportToLobby(victim)
 end
 
 local function onCharacterAdded(player: Player, char: Model)
@@ -430,20 +296,16 @@ local function onCharacterAdded(player: Player, char: Model)
 	PlayerState.syncTo(player)
 
 	local state = PlayerState.get(player)
-	if state == Constants.STATE_BURNING then
-		setBurning(player, false)
-	elseif state == Constants.STATE_SAFE then
+	local inRoundPhase = currentPhase == Constants.PHASE_ROUND or currentPhase == Constants.PHASE_REVEAL
+	local inActiveRound = inRoundPhase
+		and state == Constants.STATE_SAFE
+		and MapManager.hasMap()
+
+	if inActiveRound then
 		setSafe(player)
-	else
-		setLobby(player)
-	end
-
-	local inActiveRound = currentPhase == Constants.PHASE_ROUND
-		and (state == Constants.STATE_BURNING or state == Constants.STATE_SAFE)
-
-	if inActiveRound and MapManager.hasMap() then
 		MapManager.teleportToArena(player)
 	else
+		setLobby(player)
 		MapManager.teleportToLobby(player)
 	end
 end
@@ -470,7 +332,7 @@ function RoundManager.init()
 		KillFeedRemote.Parent = Remotes
 	end
 
-	InfectionSystem.PlayerInfected:Connect(onPlayerInfected)
+	CombatSystem.PlayerEliminated:Connect(onPlayerEliminated)
 
 	Players.PlayerAdded:Connect(bindPlayer)
 	for _, player in Players:GetPlayers() do

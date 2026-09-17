@@ -168,7 +168,7 @@ end
 
 local function isInGame(): boolean
 	if currentPhase ~= Constants.PHASE_ROUND then return false end
-	return localState == Constants.STATE_SAFE or localState == Constants.STATE_BURNING
+	return localState == Constants.STATE_SAFE
 end
 
 local function resolveAbilityForRole(): Abilities.AbilityDef?

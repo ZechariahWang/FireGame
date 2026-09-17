@@ -12,8 +12,7 @@ local DashRequestRemote: RemoteEvent
 
 local function dash(player: Player)
 	if not active then return end
-	local state = PlayerState.get(player)
-	if state ~= Constants.STATE_SAFE and state ~= Constants.STATE_BURNING then
+	if PlayerState.get(player) ~= Constants.STATE_SAFE then
 		return
 	end
 

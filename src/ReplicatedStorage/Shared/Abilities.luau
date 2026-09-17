@@ -10,7 +10,6 @@ export type AbilityDef = {
 local Abilities = {}
 
 Abilities.CATEGORY_SURVIVOR = "Survivor"
-Abilities.CATEGORY_TAGGER = "Tagger"
 
 Abilities.Defs = {
 	Dash = {
@@ -23,7 +22,6 @@ Abilities.Defs = {
 
 Abilities.Categories = {
 	[Abilities.CATEGORY_SURVIVOR] = { "Dash" },
-	[Abilities.CATEGORY_TAGGER] = { "Dash" },
 } :: { [string]: { string } }
 
 function Abilities.get(id: string): AbilityDef?
@@ -39,8 +37,6 @@ end
 function Abilities.categoryForState(state: string): string?
 	if state == Constants.STATE_SAFE then
 		return Abilities.CATEGORY_SURVIVOR
-	elseif state == Constants.STATE_BURNING then
-		return Abilities.CATEGORY_TAGGER
 	end
 	return nil
 end

@@ -3,54 +3,34 @@ local Constants = {}
 -- ROUND
 Constants.MIN_PLAYERS = 2
 Constants.INTERMISSION_TIME = 10
-Constants.ROLE_REVEAL_TIME = 8.0 -- role-reveal UI animation window (no actions allowed)
-Constants.REVEAL_TIME = 10 -- post-role-reveal positioning grace. No damage, no abilities.
+Constants.REVEAL_TIME = 10 -- pre-round positioning grace. No damage, no abilities.
 Constants.ROUND_TIME = 90
-Constants.END_DELAY_TIME = 3 -- post-round freeze: players stay in arena, invincible, abilities/tagging off, before teleport to lobby
+Constants.END_DELAY_TIME = 3 -- post-round freeze: players stay in arena, invincible, abilities/shooting off, before teleport to lobby
 Constants.END_TIME = 5
 
--- STAGES (within Round phase)
-Constants.STAGE_DURATION = 30
-Constants.STAGE_COUNT = 3
+-- PISTOL
+Constants.PISTOL_COOLDOWN = 1.0
+Constants.PISTOL_COOLDOWN_TOLERANCE = 0.05 -- server slack for network jitter: the client stamps at send, the server at receive
+Constants.PISTOL_RANGE = 200              -- studs
+Constants.PISTOL_DAMAGE = 100             -- one shot eliminates
+Constants.PISTOL_ORIGIN_TOLERANCE = 8     -- studs; max distance between client-reported origin and the head
+Constants.PISTOL_TRACER_LIFETIME = 0.08   -- seconds the tracer part stays in Workspace
 
--- INFECTION
-Constants.NEW_BURNER_GRACE = 1.0
-
--- FIRE ATTACK (active flamethrower from burners)
-Constants.FIRE_CONE_RANGE = 14            -- studs
-Constants.FIRE_CONE_HALF_ANGLE = 35       -- degrees, ~70° total spread
-Constants.FIRE_DAMAGE_PER_SEC = 80
-Constants.FIRE_FUEL_MAX = 3.0             -- seconds of continuous fire
-Constants.FIRE_FUEL_REGEN_PER_SEC = 1.0
-Constants.FIRE_FUEL_MIN_TO_START = 0.3    -- prevents tap-spam at empty
-
--- DAMAGE (passive hazard — trail walls, ignited parts)
-Constants.HAZARD_DAMAGE_PER_SEC = 10
-
--- TRAIL (Stage 2+)
-Constants.TRAIL_DURATION = 5
-Constants.TRAIL_RADIUS = 3 -- distance from wall surface that still counts as "touching"
-Constants.TRAIL_WALL_HEIGHT = 6
-Constants.TRAIL_WALL_THICKNESS = 0.2
-Constants.TRAIL_SEGMENT_MIN_LENGTH = 1.5 -- min movement before dropping a new wall segment
-Constants.TRAIL_SEGMENT_MAX_LENGTH = 10 -- larger movement (teleport / dash skip) drops no segment
-
--- IGNITE (Stage 3)
-Constants.IGNITE_RADIUS = 5
-
--- FIREPROOF FLAG 
-Constants.FIREPROOF_FLAG_NAME = "Fireproof"
+-- SHIELD
+Constants.SHIELD_DURATIONS = { 3.0, 1.0, 0.5 } -- active seconds; index = 1 + breaks in the current chain (clamped)
+Constants.SHIELD_COOLDOWN = 3.0           -- after natural expiry or manual lower. A break has no cooldown.
+Constants.SHIELD_CHAIN_RESET = 5.0        -- seconds since the last break before the chain resets to full duration
+Constants.SHIELD_WALKSPEED = 12           -- while the shield is up
 
 -- MOVEMENT
 Constants.SAFE_WALKSPEED = 16
-Constants.BURNING_WALKSPEED = 20
 Constants.MOVEMENT_STRIDE_LENGTH = 1.6        -- studs of horizontal foot drift before a swing fires
 Constants.MOVEMENT_STEP_HEIGHT = 0.55         -- peak vertical arc of a swinging foot
 Constants.MOVEMENT_STEP_TIME = 0.18           -- seconds per swing
 Constants.MOVEMENT_TURN_RATE = 14             -- exp-decay rate of HRP yaw toward camera yaw
 Constants.MOVEMENT_GROUND_RAYCAST_DEPTH = 6   -- max stud distance below the ideal foot pos to look for ground
 
--- THIRD-PERSON WEAPON (welded to the burner by RoundManager)
+-- THIRD-PERSON WEAPON (welded to every player by RoundManager)
 Constants.VIEWMODEL_DEFAULT_WEAPON = "M4A1"
 
 -- DASH
@@ -59,26 +39,29 @@ Constants.DASH_DURATION = 0.2
 Constants.DASH_VELOCITY = 60
 
 -- PLAYER STATES
-Constants.STATE_LOBBY = "Lobby"
-Constants.STATE_SAFE = "Safe"
-Constants.STATE_BURNING = "Burning"
+Constants.STATE_LOBBY = "Lobby"     -- also used for eliminated players (spectating from the lobby)
+Constants.STATE_SAFE = "Safe"       -- alive in the arena
 
 -- ROUND PHASES
 Constants.PHASE_LOBBY = "Lobby"
 Constants.PHASE_INTERMISSION = "Intermission"
-Constants.PHASE_ROLE_REVEAL = "RoleReveal"
 Constants.PHASE_REVEAL = "Reveal"
 Constants.PHASE_ROUND = "Round"
 Constants.PHASE_END = "End"
 
--- ROLE REVEAL UI COLORS
+-- UI COLORS
 Constants.SURVIVOR_COLOR = Color3.fromRGB(27, 180, 32)   -- #1BB420
 Constants.TAGGER_COLOR = Color3.fromRGB(255, 56, 60)     -- #FF383C
 Constants.WHITE = Color3.fromRGB(255, 255, 255)       -- #FFFFFF
 
+-- SHIELD STATUS (ShieldChanged remote payload)
+Constants.SHIELD_UP = "Up"
+Constants.SHIELD_COOLDOWN_STATUS = "Cooldown"
+Constants.SHIELD_READY = "Ready"
+
 -- END REASONS
 Constants.REASON_SURVIVED = "Survived"
-Constants.REASON_ALL_INFECTED = "AllInfected"
+Constants.REASON_LAST_STANDING = "LastStanding"
 Constants.REASON_ABORTED = "Aborted"
 
 return Constants

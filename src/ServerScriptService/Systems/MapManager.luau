@@ -95,7 +95,7 @@ end
 function MapManager.teleportToArena(player: Player)
 	local spawns = getCurrentSpawnPoints()
 	if #spawns == 0 then
-		warn("MapManager: current map has no SpawnPoints — using fallback")
+		warn("MapManager: current map has no SpawnPoints: using fallback")
 		teleportTo(player, CFrame.new(0, 5, 0))
 		return
 	end
@@ -123,12 +123,12 @@ function MapManager.init()
 
 	lobbySpawn = findLobbySpawn()
 	if not lobbySpawn then
-		warn("MapManager: no SpawnLocation found in Workspace.Lobby — players may not spawn correctly")
+		warn("MapManager: no SpawnLocation found in Workspace.Lobby: players may not spawn correctly")
 	end
 
 	local mapsFolder = ServerStorage:FindFirstChild("Maps")
 	if not mapsFolder then
-		warn("MapManager: ServerStorage.Maps folder is missing — rounds cannot start. Create a Folder named 'Maps' in ServerStorage and place at least one Model inside it.")
+		warn("MapManager: ServerStorage.Maps folder is missing: rounds cannot start. Create a Folder named 'Maps' in ServerStorage and place at least one Model inside it.")
 		return
 	end
 
@@ -139,7 +139,7 @@ function MapManager.init()
 		end
 	end
 	if mapCount == 0 then
-		warn("MapManager: ServerStorage.Maps contains no Models — rounds cannot start. Add at least one Model to that folder.")
+		warn("MapManager: ServerStorage.Maps contains no Models: rounds cannot start. Add at least one Model to that folder.")
 	end
 end
 

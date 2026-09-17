@@ -5,19 +5,20 @@ local TweenService = game:GetService("TweenService")
 local SoundService = game:GetService("SoundService")
 
 local Constants = require(ReplicatedStorage.Shared.Constants)
-local FireAttackController = require(script.Parent.FireAttackController)
+local CombatController = require(script.Parent.CombatController)
 local CombatFeedbackController = {}
 local localPlayer = Players.LocalPlayer
 
 -- need to update these later, i dont have the sounds rn
 local SOUND_IDS = {
-	hitConfirm = "",     -- short tick when burner lands a damage tick on a victim
+	hitConfirm = "",     -- short tick when the local player lands a shot on a victim
 	sizzleLoop = "",     -- looping crackle while local player is taking damage
 	grunt75 = "",        -- HP crossed below 75%
 	grunt50 = "",        -- HP crossed below 50%
 	grunt25 = "",        -- HP crossed below 25%
-	killWhoosh = "",     -- victim was just converted by the local player
-	convertImpact = "",  -- local player was just converted
+	killWhoosh = "",     -- victim was just eliminated by the local player
+	convertImpact = "",  -- local player was just eliminated
+	shotBlocked = "",    -- a shield absorbed a shot the local player fired or took
 }
 
 local screenGui: ScreenGui
@@ -43,6 +44,12 @@ local function initHUD()
 	vignette = screenGui:WaitForChild("Vignette") :: Frame
 	crosshair = screenGui:WaitForChild("Crosshair") :: Frame
 	damageNumberTemplate = ReplicatedStorage:FindFirstChild("Assets"):FindFirstChild("UI"):WaitForChild("DamageNumber") :: BillboardGui
+
+	sizzleSound = Instance.new("Sound")
+	sizzleSound.Name = "SizzleLoop"
+	sizzleSound.SoundId = SOUND_IDS.sizzleLoop
+	sizzleSound.Looped = true
+	sizzleSound.Parent = SoundService
 end
 
 local function playSound(id: string, volume: number?)
@@ -79,60 +86,47 @@ local function pulseVignette(intensity: number)
 end
 
 local CROSSHAIR_IDLE_SIZE = UDim2.fromOffset(4, 4)
-local CROSSHAIR_FIRING_SIZE = UDim2.fromOffset(8, 8)
+local CROSSHAIR_PUNCH_SIZE = UDim2.fromOffset(10, 10)
 local CROSSHAIR_IDLE_COLOR = Color3.fromRGB(187, 102, 12)
-local CROSSHAIR_FIRING_COLOR = Color3.fromRGB(255, 80, 30)
+local CROSSHAIR_PUNCH_COLOR = Color3.fromRGB(255, 80, 30)
 local CROSSHAIR_IDLE_TRANSPARENCY = 0.5
-local CROSSHAIR_FIRING_TRANSPARENCY = 0
+local CROSSHAIR_PUNCH_TRANSPARENCY = 0
 local CROSSHAIR_TWEEN_TIME = 0.12
 
-local isBurner = false
-local isFiring = false
-local burnerModeActive = false
+local localState: string = Constants.STATE_LOBBY
+local combatModeActive = false
 local currentPhase: string = Constants.PHASE_LOBBY
 
-local function shouldBurnerModeBeActive(): boolean
-	-- Burner mode is the custom crosshair. It is deferred until after
-	-- PHASE_ROLE_REVEAL so it doesn't spoil the role-reveal animation.
-	if not isBurner then return false end
+local function shouldCombatModeBeActive(): boolean
+	if localState ~= Constants.STATE_SAFE then return false end
 	return currentPhase == Constants.PHASE_REVEAL or currentPhase == Constants.PHASE_ROUND
 end
 
-local function applyCrosshairFiring(firing: boolean)
+local function resetCrosshair()
 	if not crosshair then return end
+	crosshair.Size = CROSSHAIR_IDLE_SIZE
+	crosshair.BackgroundColor3 = CROSSHAIR_IDLE_COLOR
+	crosshair.BackgroundTransparency = CROSSHAIR_IDLE_TRANSPARENCY
+end
+
+local function punchCrosshair()
+	if not crosshair or not crosshair.Visible then return end
+	-- Reverses = true plays the punch out and back without a second tween.
 	TweenService:Create(
 		crosshair,
-		TweenInfo.new(CROSSHAIR_TWEEN_TIME, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+		TweenInfo.new(CROSSHAIR_TWEEN_TIME, Enum.EasingStyle.Quad, Enum.EasingDirection.Out, 0, true),
 		{
-			Size = if firing then CROSSHAIR_FIRING_SIZE else CROSSHAIR_IDLE_SIZE,
-			BackgroundColor3 = if firing then CROSSHAIR_FIRING_COLOR else CROSSHAIR_IDLE_COLOR,
-			BackgroundTransparency = if firing then CROSSHAIR_FIRING_TRANSPARENCY else CROSSHAIR_IDLE_TRANSPARENCY,
+			Size = CROSSHAIR_PUNCH_SIZE,
+			BackgroundColor3 = CROSSHAIR_PUNCH_COLOR,
+			BackgroundTransparency = CROSSHAIR_PUNCH_TRANSPARENCY,
 		}
 	):Play()
 end
 
-local function setBurnerMode(active: boolean)
-	if active then
-		if crosshair then
-			crosshair.Size = CROSSHAIR_IDLE_SIZE
-			crosshair.BackgroundColor3 = CROSSHAIR_IDLE_COLOR
-			crosshair.BackgroundTransparency = CROSSHAIR_IDLE_TRANSPARENCY
-			crosshair.Visible = true
-		end
-		-- Sync from the authoritative fire state in case burner mode toggled on
-		-- while fire was already in flight.
-		isFiring = FireAttackController.isFiring()
-		if isFiring then
-			applyCrosshairFiring(true)
-		end
-	else
-		if crosshair then
-			crosshair.Visible = false
-		end
-		if isFiring then
-			isFiring = false
-			applyCrosshairFiring(false)
-		end
+local function setCombatMode(active: boolean)
+	resetCrosshair()
+	if crosshair then
+		crosshair.Visible = active
 	end
 end
 
@@ -236,6 +230,7 @@ local function damageNumberStep(_dt: number)
 end
 
 local function startSizzle()
+	if not sizzleSound then return end
 	if sizzlePlaying or sizzleSound.SoundId == "" then return end
 	sizzlePlaying = true
 	sizzleSound.Volume = 0
@@ -244,6 +239,7 @@ local function startSizzle()
 end
 
 local function stopSizzle()
+	if not sizzleSound then return end
 	if not sizzlePlaying then return end
 	sizzlePlaying = false
 	local tween = TweenService:Create(sizzleSound, TweenInfo.new(0.18), { Volume = 0 })
@@ -302,8 +298,7 @@ local function sizzleStep(_dt: number)
 end
 
 local function onDamageDealt(victim: Player, dmg: number, _victimHP: number)
-	-- Only the burner who landed the hit receives this. Fires every server tick
-	-- (~60Hz) while the cone connects, so we throttle and batch.
+	-- Only the shooter who landed the hit receives this.
 	if not victim or not victim.Parent then return end
 
 	local now = os.clock()
@@ -340,56 +335,52 @@ local function onKillFeed(killerName: string?, victimName: string)
 	end
 end
 
+local function onShotBlocked(_other: Player?)
+	playSound(SOUND_IDS.shotBlocked, 0.8)
+end
+
 local function onCharacterAdded(_char: Model)
 	lastKnownHP = math.huge
 	shakeIntensity = 0
 end
 
-local function reconcileBurnerMode()
-	local desired = shouldBurnerModeBeActive()
-	if desired == burnerModeActive then return end
-	burnerModeActive = desired
-	setBurnerMode(desired)
+local function reconcileCombatMode()
+	local desired = shouldCombatModeBeActive()
+	if desired == combatModeActive then return end
+	combatModeActive = desired
+	setCombatMode(desired)
 end
 
 function CombatFeedbackController.init()
 
 	initHUD()
-	-- Burner mode + custom crosshair are off until the local player is Burning
-	-- and the role-reveal animation has finished.
-	setBurnerMode(false)
+	setCombatMode(false)
 
 	local Remotes = ReplicatedStorage:WaitForChild("Remotes")
 	local DamageDealtRemote = Remotes:WaitForChild("DamageDealt") :: RemoteEvent
 	local DamageTakenRemote = Remotes:WaitForChild("DamageTaken") :: RemoteEvent
 	local KillFeedRemote = Remotes:WaitForChild("KillFeed") :: RemoteEvent
+	local ShotBlockedRemote = Remotes:WaitForChild("ShotBlocked") :: RemoteEvent
 	local PlayerStateRemote = Remotes:WaitForChild("PlayerStateChanged") :: RemoteEvent
 	local RoundStateRemote = Remotes:WaitForChild("RoundStateChanged") :: RemoteEvent
 
 	DamageDealtRemote.OnClientEvent:Connect(onDamageDealt)
 	DamageTakenRemote.OnClientEvent:Connect(onDamageTaken)
 	KillFeedRemote.OnClientEvent:Connect(onKillFeed)
+	ShotBlockedRemote.OnClientEvent:Connect(onShotBlocked)
 
 	PlayerStateRemote.OnClientEvent:Connect(function(player: Player, state: string)
 		if player ~= localPlayer then return end
-		isBurner = state == Constants.STATE_BURNING
-		reconcileBurnerMode()
+		localState = state
+		reconcileCombatMode()
 	end)
 
 	RoundStateRemote.OnClientEvent:Connect(function(phase: string)
 		currentPhase = phase
-		reconcileBurnerMode()
+		reconcileCombatMode()
 	end)
 
-	-- Crosshair tracks the same signal that drives the viewmodel flame, so the
-	-- two can never disagree (e.g. LMB during the Reveal countdown produces no
-	-- FireStateChanged event, so the crosshair stays idle while no flame emits).
-	FireAttackController.FireStateChanged:Connect(function(active: boolean)
-		if not burnerModeActive then return end
-		if isFiring == active then return end
-		isFiring = active
-		applyCrosshairFiring(active)
-	end)
+	CombatController.ShotFired:Connect(punchCrosshair)
 
 	localPlayer.CharacterAdded:Connect(onCharacterAdded)
 	if localPlayer.Character then

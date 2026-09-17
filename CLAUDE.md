@@ -4,141 +4,132 @@ Project context for Claude Code when working in this Roblox game.
 
 ## Project: Burn Rush
 
-A round-based Roblox tag-style game. One player starts "burning" and converts others by spraying them with a flamethrower (with stage-based passive hazards layered on top). Built with Rojo + Luau.
+A round-based Roblox free-for-all shooter. Every player is armed with a hitscan pistol and a breakable shield; one shot eliminates, a shield blocks one shot, last player standing wins (or everyone still alive wins if the timer runs out). Built with Rojo + Luau.
 
 - **Rojo project**: `default.project.json` (services map to `src/<Service>/`)
 - **Toolchain**: `aftman.toml`
 - **Scripts**: Luau (`.luau` ModuleScript, `.server.luau` Script, `.client.luau` LocalScript)
 - **Style**: Functional modules (no OOP). Each system is a table with `init()` and public functions.
 
+The earlier tag/flamethrower build (burner conversion, stages, fire hazards) lives under `archive/` at the repo root, outside the Rojo tree, for reference only.
+
 ## Architecture
 
 ### Server (`src/ServerScriptService/`)
 
-- `Main.server.luau` — bootstrap. Requires and `init()`s every system in this order:
-  `PlayerState → MapManager → AbilitySystem → FireAttackSystem → InfectionSystem → FireSpreadSystem → RoundManager`
-- `Systems/PlayerState.luau` — per-player state (`Lobby` / `Safe` / `Burning`). Replicates via `PlayerStateChanged` RemoteEvent. Exposes `StateChanged` BindableEvent.
-- `Systems/RoundManager.luau` — game loop and round lifecycle. Owns the phase state machine, the 3-stage in-round progression, character setup (regen disable via `BreakJointsOnDeath = false`), per-burner Fire/Highlight visuals, and the kill-feed broadcast. Starts/stops `FireAttackSystem` alongside `InfectionSystem`/`FireSpreadSystem`.
-- `Systems/FireAttackSystem.luau` — active flamethrower for burners. Holds per-burner fuel, spawns/destroys the visual `ParticleEmitter` stream on the torso when the player is firing, and exposes `getFiringBurners()` (used by `InfectionSystem` to do cone damage). Auto-creates the `FireRequest` and `FuelChanged` remotes on `init()`. Drains fuel only while firing; regenerates passively otherwise.
-- `Systems/InfectionSystem.luau` — damage engine. Each Heartbeat, iterates safe players; for each, checks (a) the cone of every actively-firing burner from `FireAttackSystem`, then (b) registered hazards (trail walls, ignited parts). Sends `DamageDealt`/`DamageTaken` RemoteEvents when a tick lands. When HP hits 0, fires `PlayerInfected` and restores HP (no actual death). Auto-creates the `DamageDealt` and `DamageTaken` remotes on `init()`.
-- `Systems/FireSpreadSystem.luau` — owns Stage 2 fire-wall trails and Stage 3 touch-ignition. Wall segments are visible Neon parts with flame `ParticleEmitter`s — they double as the visual and the damage hitbox.
-- `Systems/MapManager.luau` — clones map from `ServerStorage.Maps` into `Workspace.LoadedMap`, manages spawn points and lobby teleport. Warns at `init()` if `ServerStorage.Maps` is missing or empty.
-- `Systems/AbilitySystem.luau` — dash mechanic for safe players (Q key). Phase-gated via `start()` / `stop()`: dash is rejected outside the active `Round` phase, so safe players cannot dash during reveal/role-reveal/lobby. `start()` also clears `lastDash` so cooldowns don't carry across rounds.
+- `Main.server.luau`: bootstrap. Requires and `init()`s every system in this order:
+  `PlayerState → MapManager → AbilitySystem → CombatSystem → RoundManager`
+- `Systems/PlayerState.luau`: per-player state (`Lobby` / `Safe`; eliminated players go back to `Lobby`). Replicates via `PlayerStateChanged` RemoteEvent. Exposes `StateChanged` BindableEvent.
+- `Systems/RoundManager.luau`: game loop and round lifecycle. Owns the phase state machine, character setup (`BreakJointsOnDeath = false` on every spawn), attaching/detaching the third-person weapon model, elimination handling, and the kill-feed broadcast. Starts/stops `CombatSystem` and `AbilitySystem` together at the Reveal → Round boundary and at round end.
+- `Systems/CombatSystem.luau`: the pistol and shield engine. Per-player shield state (up/cooldown/breaks-in-chain), hitscan shoot handling, shield raise/lower/break logic, and the passive Heartbeat step that expires shields and clears cooldowns. Auto-creates `ShootRequest`, `ShieldRequest`, `ShieldChanged`, `ShotBlocked`, `DamageDealt`, `DamageTaken` on `init()` via the `ensureRemote` pattern. Exposes `PlayerEliminated` BindableEvent `(victim, killer?)`.
+- `Systems/MapManager.luau`: clones map from `ServerStorage.Maps` into `Workspace.LoadedMap`, manages spawn points and lobby teleport. Warns at `init()` if `ServerStorage.Maps` is missing or empty.
+- `Systems/AbilitySystem.luau`: dash mechanic for safe players (Q key). Phase-gated via `start()` / `stop()`: dash is rejected outside the active `Round` phase, so safe players cannot dash during reveal or lobby. `start()` also clears `lastDash` so cooldowns don't carry across rounds.
 
 ### Client (`src/StarterPlayerScripts/`)
 
-- `Main.client.luau` — bootstrap. Inits `AbilityHUDController`, `DashController`, `UIController`, `KillFeedController`, `KillConfirmController`, `RoleRevealController`, `FireAttackController`, `CombatFeedbackController`, `ChangeIndicatorController` (in that order). `FireAttackController` is intentionally inited **before** `CombatFeedbackController` so its `FireStateChanged` BindableEvent (the single source of truth for "fire is being emitted") is guaranteed live when the downstream controller connects.
-- The tagger plays in **third person with the mouse unlocked**. The old first-person viewmodel (`ViewmodelController` plus `Shared/Weapons` and `Shared/Projectiles`) is archived under `archive/` at the repo root, outside the Rojo tree.
-- `Controllers/UIController.luau` — reads phase/stage/player-state remotes, renders RichText into two labels: `Game.StatusFrame.Status` (main announcements + stage) and `Game.SecondaryStatus.Secondary` (timer + alive count). Alive count excludes the local player (`safe / total-1`). Both labels are blanked during `PHASE_ROLE_REVEAL` so the role UI has the screen to itself.
-- `Controllers/KillFeedController.luau` — listens to `KillFeed` remote, clones `Game.ID_Objects.KillData` into `Game.Killfeed` per kill, animates entrance/exit (TweenService), maintains a queue.
-- `Controllers/KillConfirmController.luau` — pop-up notification ("ELIMINATED <Name>") shown to the killer only when `KillFeed` fires with `killerName == localPlayer.Name`. Clones `Game.ID_Objects.KillConfirm` into `Game` per kill. Each banner has its own independent lifecycle (expand → fade-in → 3s hold → fade-out → collapse) — banners do **not** cancel each other. Concurrent kills stack: the newest sits at the template's authored position; older ones reflow by `STACK_DIRECTION` (-1 = upward) × `(height + STACK_GAP)` per slot. Soft cap `MAX_STACK = 5` evicts the oldest banner when exceeded; the evicted banner's coroutine bails on its next `clone.Parent` check after destroy. All stacking tunables are at the top of the file.
-- `Controllers/DashController.luau` — sends `DashRequest` on Q.
-- `Controllers/RoleRevealController.luau` — drives the per-player role-reveal animation during `PHASE_ROLE_REVEAL`. Reads `extra.burner` from the phase broadcast to derive `localIsBurner`, then animates `Game.Role` (Frame, with TextLabel children `Title` (static heading, never touched) and `ROLE` (cycled)). Timeline: 0.3s entrance (UIScale 0→1, Back/Out) → 2s cycle (`ROLE.Text` swaps SURVIVOR/TAGGER, interval easing from 0.04s → 0.30s) → 0.5s settle (final role with a UIScale punch on the label) → 0.5s exit (UIScale 1→0, Quad/In). Uses a `revealGen` generation counter so an in-flight animation bails if the phase changes mid-anim. Late joiners (`duration < ROLE_REVEAL_TIME * 0.6`) skip the cycle.
-- `Controllers/FireAttackController.luau` — burner offense input + the canonical client-side "is firing" signal. While the local player is `Burning` AND `currentPhase == PHASE_ROUND` AND fuel ≥ `FIRE_FUEL_MIN_TO_START`, holding LMB sends `FireRequest(true)`; releasing sends `FireRequest(false)`. **Phase gate**: `tryStartHold` bails when `currentPhase ~= PHASE_ROUND`, so LMB during the Reveal countdown produces no fire request and no `FireStateChanged` event, so no flame emits. The `RoundStateChanged` handler also calls `stopHold()` whenever phase leaves Round, so a mid-round-end LMB-hold cleanly releases. Listens to `FuelChanged` to drive `Game.FuelMeter.BarBG.Fill` (size tween) and `Game.FuelMeter.BarBG.EmptyOverlay` (visible when fuel is below `FIRE_FUEL_MIN_TO_START`). Hides the meter for non-burners. Has a `RenderStepped` safety check that releases the hold if mouse-up was missed (e.g., focus lost). Exposes `FireStateChanged: BindableEvent.Event` (fired with `(active: boolean)` from `setHolding`) and `isFiring(): boolean` — consumed by `CombatFeedbackController` (crosshair).
-- `Controllers/CombatFeedbackController.luau` — purely cosmetic. Listens to `DamageDealt` (burner side: throttled hit-confirm sound, batches damage into floating numbers above the victim's head via the `ReplicatedStorage.Assets.UI.DamageNumber` BillboardGui template) and `DamageTaken` (victim side: vignette pulse, camera shake, HP-threshold grunts at 75/50/25%, looping sizzle while taking damage). Also listens to `KillFeed` for kill-confirm whoosh / convert-impact effects. Uses `Game.Vignette` and `Game.Crosshair` GuiObjects. Sound IDs are stubbed (`""`) — see the `SOUND_IDS` table at the top of the file when assets are ready.
-  - **Burner mode**: listens to both `PlayerStateChanged` and `RoundStateChanged` for the local player. Burner mode is active iff `state == Burning AND phase ∈ {Reveal, Round}` — deliberately **off** during `PHASE_ROLE_REVEAL` so the crosshair doesn't spoil the role-reveal animation, and **off** during `PHASE_END`. When active, it shows the custom `Game.Crosshair`. When inactive (round end, lobby, role-reveal in progress) it hides the crosshair. The camera is never locked and the mouse stays unlocked: the tagger plays in third person. On activation it syncs from `FireAttackController.isFiring()` so an in-flight stream is reflected immediately; on deactivation it snaps the crosshair back to idle.
-  - **Crosshair**: a continuous two-state visual driven by `FireAttackController.FireStateChanged` (gated on `burnerModeActive`) — idle while not firing, larger/red while firing, with a smooth 0.12s tween between them. **It does NOT track raw LMB.** Pressing LMB during the Reveal countdown produces no `FireStateChanged` event, so the crosshair stays idle exactly while no flame emits. There is **no** per-hit pulse — the crosshair stays in its firing state for the entire fire-emit window, including auto-stop on fuel exhaustion (the `FuelChanged` handler in `FireAttackController` calls `setHolding(false, false)`, which fires `FireStateChanged(false)`).
+- `Main.client.luau`: bootstrap. Inits `AbilityHUDController`, `DashController`, `UIController`, `KillFeedController`, `KillConfirmController`, `CombatController`, `CombatFeedbackController`, `ChangeIndicatorController` (in that order).
+- Players play in **third person with the mouse unlocked**: there is no camera lock and no crosshair-driven first-person mode. Aiming is a raycast from the camera through the screen center.
+- `Controllers/UIController.luau`: reads phase/player-state remotes, renders RichText into two labels: `Game.StatusFrame.Status` (main announcements) and `Game.SecondaryStatus.Secondary` (timer + alive count). During `Round`, Status reads "LAST ONE STANDING" and Secondary shows `1:30  |  2/3` (timer + `safe/total`, alive count excludes the local player). At `End`, Status renders the winner banner (1 / 2 / `N PLAYERS SURVIVED!` formats, empty winners falls back to "ROUND ENDED").
+- `Controllers/KillFeedController.luau`: listens to `KillFeed` remote, clones `Game.ID_Objects.KillData` into `Game.Killfeed` per kill, animates entrance/exit (TweenService), maintains a queue. Text is `"<Killer> shot <Victim>"` when there's a killer, `"<Victim> eliminated"` otherwise.
+- `Controllers/KillConfirmController.luau`: pop-up notification ("ELIMINATED <Name>") shown to the killer only when `KillFeed` fires with `killerName == localPlayer.Name`. Clones `Game.ID_Objects.KillConfirm` into `Game` per kill. Each banner has its own independent lifecycle (expand → fade-in → 3s hold → fade-out → collapse): banners do **not** cancel each other. Concurrent kills stack: the newest sits at the template's authored position; older ones reflow by `STACK_DIRECTION` (-1 = upward) × `(height + STACK_GAP)` per slot. Soft cap `MAX_STACK = 5` evicts the oldest banner when exceeded; the evicted banner's coroutine bails on its next `clone.Parent` check after destroy. All stacking tunables are at the top of the file.
+- `Controllers/DashController.luau`: sends `DashRequest` on Q, phase-gated to `Round` and state-gated to `Safe`. Resets `lastDash` to 0 the moment the client sees phase transition into `Round`, so stale cooldowns don't carry across rounds.
+- `Controllers/CombatController.luau`: shooting and shield input, and the source of truth for the shield meter. On LMB, raycasts `Camera:ViewportPointToRay` at viewport center out to `PISTOL_RANGE` (excluding the local character) to find the aim point, then fires `ShootRequest(Head.Position, direction)`: client-side gated on state `Safe`, phase `Round`, shield not up, and the local `PISTOL_COOLDOWN` timer. On RMB, fires `ShieldRequest(true)` to raise (only when status is Ready) or `ShieldRequest(false)` to lower (only while Up). Listens to `ShieldChanged(status, duration, breaksInChain)` to drive `Game.FuelMeter.BarBG.Fill`: full and draining to empty over `duration` while Up, empty and filling back up over `duration` while on Cooldown, full and static when Ready. `BarBG.EmptyOverlay` is visible only during Cooldown. The meter (`Game.FuelMeter`) is shown only while combat is active - local state `Safe` and phase in `{Reveal, Round}` - so it's visible (but inert) during the Reveal countdown too. Exposes `ShotFired: BindableEvent.Event`, fired whenever a shot is actually sent, consumed by `CombatFeedbackController` for the crosshair punch.
+- `Controllers/CombatFeedbackController.luau`: purely cosmetic. Listens to `DamageDealt` (shooter side: throttled hit-confirm sound, batches damage into floating numbers above the victim's head via the `ReplicatedStorage.Assets.UI.DamageNumber` BillboardGui template), `DamageTaken` (victim side: vignette pulse, camera shake via `Humanoid.CameraOffset`, HP-threshold grunts at 75/50/25%, looping sizzle while taking damage), `KillFeed` (kill-confirm whoosh for a kill landed / convert-impact effect when eliminated), and `ShotBlocked` (a sound for either party when a shield absorbs a shot). Uses `Game.Vignette` and `Game.Crosshair` GuiObjects. Sound IDs are stubbed (`""`): see the `SOUND_IDS` table at the top of the file when assets are ready.
+  - **Combat mode**: listens to both `PlayerStateChanged` and `RoundStateChanged` for the local player. Active iff `state == Safe AND phase ∈ {Reveal, Round}`. When active, shows `Game.Crosshair`; when inactive, hides it and snaps it back to idle. There is no camera lock and no `MouseIconEnabled` change: third person and the default cursor stay in effect throughout.
+  - **Crosshair**: idle by default, punched (size + color tween, reverses automatically) on `CombatController.ShotFired`. It is a per-shot pulse, not a continuous fire-state visual: there's no sustained flame stream anymore.
 
 ### Character (`src/StarterCharacterScripts/`)
 
-- `Health.client.luau` — empty override of Roblox's default Health script. Disables passive HP regen so damage from burners persists between encounters.
+- `Health.client.luau`: empty override of Roblox's default Health script. Disables passive HP regen so damage persists between encounters.
 
 ### Shared (`src/ReplicatedStorage/`)
 
-- `Shared/Constants.luau` — all tunables (round/stage timing, damage rates, radii, walkspeeds, tag names, state strings).
-- `Shared/Types.luau` — Luau type aliases (currently lightly used).
+- `Shared/Constants.luau`: all tunables (round timing, pistol/shield numbers, movement/dash, state and phase strings, UI colors, shield status strings, end reasons).
+- `Shared/Types.luau`: Luau type aliases: `PlayerStateName` (`"Lobby" | "Safe"`), `RoundPhase`, `EndReason`, `RoundEndExtra`.
+- `Shared/Abilities.luau`: ability metadata table (currently just `Dash`), keyed by id, grouped into categories. `Abilities.categoryForState(state)` maps `STATE_SAFE` to the `Survivor` category; used by `AbilityHUDController` to pick which ability icon to show.
 
 ### Remotes (`ReplicatedStorage.Remotes`)
 
 The `Remotes` folder lives in Studio (not Rojo source); it is preserved across syncs because `ReplicatedStorage` has `ignoreUnknownInstances: true`. Several remotes are **auto-created** by their owning system if missing (the `ensureRemote` pattern), so you don't have to author them in Studio.
 
-- `RoundStateChanged` (RemoteEvent) — server broadcasts `(phase, duration?, extra?)`. During `RoleReveal` and `Reveal`, `extra` is `{ burner = name }` (same shape — clients use `extra.burner == localPlayer.Name` to derive `localIsBurner`). During `Round`, `extra` is `{ stage = 1|2|3 }`. At `End`, `extra` is `{ winners = { name, ... }, reason }` — `winners` may be empty (everyone burned / aborted).
-- `PlayerStateChanged` (RemoteEvent) — server broadcasts `(player, state)`.
-- `DashRequest` (RemoteEvent) — client → server.
-- `FireRequest` (RemoteEvent) — client → server `(active: bool)`. Burner press/release of LMB. Auto-created by `FireAttackSystem.init()`.
-- `FuelChanged` (RemoteEvent) — server → client `(fuel, max)`. Throttled (only fires on >=0.05s change, plus forced edges at full/empty). Auto-created by `FireAttackSystem.init()`.
-- `DamageDealt` (RemoteEvent) — server → attacker `(victim, dmg, victimHP)` per damage tick (only when source was a Player). Auto-created by `InfectionSystem.init()`.
-- `DamageTaken` (RemoteEvent) — server → victim `(attacker?, dmg, currentHP)` per damage tick. `attacker` is `nil` for hazard damage. Auto-created by `InfectionSystem.init()`.
-- `KillFeed` (RemoteEvent) — server broadcasts `(killerName?, victimName)` per conversion. Auto-created by `RoundManager.init()`.
-- `InfectionProgress` (RemoteEvent) — legacy; no longer fired (kept to avoid Studio-side cleanup).
+- `RoundStateChanged` (RemoteEvent): server broadcasts `(phase, duration?, extra?)`. During `Reveal` and `Round`, `extra` is `nil`. At `End`, `extra` is `{ winners = { name, ... }, reason }`: `winners` is empty when `reason == "Aborted"`.
+- `PlayerStateChanged` (RemoteEvent): server broadcasts `(player, state)`.
+- `DashRequest` (RemoteEvent): client → server.
+- `ShootRequest` (RemoteEvent): client → server `(origin: Vector3, direction: Vector3)`. `origin` is the client's Head position. Server rejects if `origin` is more than `PISTOL_ORIGIN_TOLERANCE` studs from the server-side head, if `direction` isn't a finite non-zero vector, if the round isn't active, if the shooter isn't `Safe`, if their shield is up, or if they're still on `PISTOL_COOLDOWN`. Auto-created by `CombatSystem.init()`.
+- `ShieldRequest` (RemoteEvent): client → server `(raise: boolean)`. `true` raises (rejected if already up, on cooldown, round inactive, or not `Safe`); `false` lowers manually and starts the cooldown. Auto-created by `CombatSystem.init()`.
+- `ShieldChanged` (RemoteEvent): server → owning client only `(status, duration, breaksInChain)`. `status` is one of `Constants.SHIELD_UP` / `SHIELD_COOLDOWN_STATUS` / `SHIELD_READY`; `duration` is how long that status lasts (0 for Ready). Sent on every transition (raise, natural expiry, manual lower, break, cooldown ending) and once each on `CombatSystem.start()` / `stop()` as Ready. Auto-created by `CombatSystem.init()`.
+- `ShotBlocked` (RemoteEvent): server → both parties `(otherPlayer: Player)`, sent when a shield absorbs a shot: to the shooter with the victim, to the victim with the shooter. Auto-created by `CombatSystem.init()`.
+- `DamageDealt` (RemoteEvent): server → shooter `(victim, dmg, victimHP)` on a landed, unblocked shot. `victimHP` is the HP after the shot (0 on elimination). Auto-created by `CombatSystem.init()`.
+- `DamageTaken` (RemoteEvent): server → victim `(attacker?, dmg, currentHP)`, same moment as `DamageDealt`. Auto-created by `CombatSystem.init()`.
+- `KillFeed` (RemoteEvent): server broadcasts `(killerName?, victimName)` per elimination. Auto-created by `RoundManager.init()`.
+- `FireRequest`, `FuelChanged`, `InfectionProgress`: no longer used by any active system; don't create or reference them (kept only to avoid Studio-side cleanup on old saves).
 
 ### GUI structure (`PlayerGui.Game`, a ScreenGui authored in Studio)
 
-- `StatusFrame.Status` (TextLabel) — main HUD line. Stage info during round, "GET READY!" during intermission, `"<NAME> IS BURNING!"` during reveal, winner banner at end (1 / 2 / `N PLAYERS` formats). RichText, all uppercase.
-- `SecondaryStatus.Secondary` (TextLabel) — secondary HUD line. Timer + `safe/total` alive count joined by ` | `.
-- `Killfeed` (Frame) — kill feed entries are parented here.
-- `ID_Objects.KillData` (TextLabel) — template cloned per kill into `Killfeed`. Hidden by default; `Visible = true` set on the clone.
-- `FuelMeter` (GuiObject) — fuel bar shown only while local player is `Burning`. Children: `BarBG.Fill` (sized 0..1 by `FireAttackController`) and `BarBG.EmptyOverlay` (visible while fuel is below `FIRE_FUEL_MIN_TO_START`).
-- `Vignette` (Frame) — full-screen damage overlay; `BackgroundTransparency` is tweened by `CombatFeedbackController` on every damage tick taken.
-- `Crosshair` (Frame) — small centered reticle; punched (size + color tween) by `CombatFeedbackController` on every confirmed hit landed.
-- `Role` (Frame) — role-reveal UI shown during `PHASE_ROLE_REVEAL`. Children: `Title` (TextLabel, static heading authored in Studio — never modified by code) and `ROLE` (TextLabel whose `.Text` and `.TextColor3` are cycled then settled by `RoleRevealController`). The frame's UIScale is created on first resolve if missing.
+- `StatusFrame.Status` (TextLabel): main HUD line. "GET READY!" during intermission/reveal, "LAST ONE STANDING" during the round, winner banner at end. RichText, all uppercase.
+- `SecondaryStatus.Secondary` (TextLabel): secondary HUD line. Timer + `safe/total` alive count joined by ` | `.
+- `Killfeed` (Frame): kill feed entries are parented here.
+- `ID_Objects.KillData` (TextLabel): template cloned per kill into `Killfeed`. Hidden by default; `Visible = true` set on the clone.
+- `FuelMeter` (GuiObject): now the **shield meter**. Shown only while combat is active for the local player. Children: `BarBG.Fill` (sized 0..1 by `CombatController` to reflect shield charge) and `BarBG.EmptyOverlay` (visible while the shield is on cooldown).
+- `Vignette` (Frame): full-screen damage overlay; `BackgroundTransparency` is tweened by `CombatFeedbackController` on every damage tick taken.
+- `Crosshair` (Frame): small centered reticle; punched (size + color tween) by `CombatFeedbackController` on every shot fired.
+- `Ability` (GuiObject): dash ability HUD. Children: `AbilityIcon` (ImageLabel), `AbilityTitle` (TextLabel), `Overlay` (GuiObject swept 1→0 height by `AbilityHUDController.triggerCooldown` across the ability's cooldown). Shown only while the local player is `Safe` during `Round`.
+- `ChangeIndicator` (Frame): elimination banner. Children: `Title` (TextLabel, set to "ELIMINATED") and `UpdatedInfo` (TextLabel, set to "SPECTATING"). Played by `ChangeIndicatorController` when the local player transitions off `Safe` mid-round while other players are still `Safe`.
 
 ### Asset templates (`ReplicatedStorage.Assets.UI`)
 
-- `DamageNumber` (BillboardGui) — must contain a `Label` (TextLabel) with a `UIStroke` and `UIScale`. Cloned and parented to the victim's `Head` per damage burst by `CombatFeedbackController`. Authored in Studio (not in Rojo source).
+- `DamageNumber` (BillboardGui): must contain a `Label` (TextLabel) with a `UIStroke` and `UIScale`. Cloned and parented to the victim's `Head` per damage burst by `CombatFeedbackController`. Authored in Studio (not in Rojo source).
 
 ## Round Flow
 
-`Lobby → Intermission (10s) → RoleReveal (8s) → Reveal (10s) → Round (90s, 3 × 30s stages) → End (3s arena freeze + 5s lobby = 8s) → Lobby`
+`Lobby → Intermission (10s) → Reveal (10s) → Round (90s) → End (3s arena freeze + 5s lobby = 8s) → Lobby`
 
 `gameLoop` loads the map **before** broadcasting `Intermission`. If the map fails to load (no `ServerStorage.Maps`, or it's empty), it warns and stays in the `Lobby` phase instead of getting stuck cycling through intermission.
 
-**RoleReveal phase** is a per-player UI animation window. The burner has already been chosen and `setBurning` has been called (so they have fire + outline) before the phase broadcast. `RoleRevealController` cycles `Game.Role.ROLE` between SURVIVOR (#1BB420) and TAGGER (#FF383C), settles on the local player's actual role, then fades out. `CombatFeedbackController` deliberately does NOT activate burner mode (custom crosshair) during this phase to preserve the suspense.
+**Reveal phase** is a no-damage, no-shield, no-dash positioning window (`REVEAL_TIME = 10s`). Every player is set `Safe` and teleported into the arena, but `CombatSystem` and `AbilitySystem` aren't started until Reveal ends, so `ShootRequest`/`ShieldRequest`/`DashRequest` are all rejected server-side, and the client's own phase gates (`currentPhase ~= PHASE_ROUND`) stop it from even sending them.
 
-**Reveal phase** is a no-damage, no-ability positioning window. Safe players use the time to position themselves; the burner has their crosshair active but **inert**. `FireAttackSystem`, `InfectionSystem`, `FireSpreadSystem`, and `AbilitySystem` are all deliberately NOT started until reveal ends — and on the **client**, `FireAttackController.tryStartHold` bails when `currentPhase ~= PHASE_ROUND`, so LMB during this window does not even fire the local `FireStateChanged` event. As a result no damage, walls, ignition, fuel drain, dashing, flame emission, or crosshair fire-state animation can happen during Reveal.
+**Round phase** (`ROUND_TIME = 90s`) is when `CombatSystem.start()` and `AbilitySystem.start()` run. It ends early only when `PlayerState.countInState(STATE_SAFE) <= 1` (one player left: `REASON_LAST_STANDING`, they're the sole winner) or the player count drops below `MIN_PLAYERS` (`REASON_ABORTED`, winners empty). Otherwise it runs the full 90s and every remaining `Safe` player wins (`REASON_SURVIVED`).
 
 **End phase** is a single 8-second window split server-side into two halves:
-1. **Arena freeze (`END_DELAY_TIME = 3s`)**: every active system is stopped (`FireAttackSystem`, `InfectionSystem`, `FireSpreadSystem`, `AbilitySystem`), every character gets an invisible `ForceField` named `RoundEndForceField` (belt-and-suspenders invincibility against any in-flight damage tick), and `RoundStateChanged(PHASE_END, END_DELAY_TIME + END_TIME, { winners, reason })` is broadcast **immediately**. Players are still standing in the arena, but burner mode deactivates client-side (phase ∉ {Reveal, Round}) so the crosshair hides and `FireAttackController` will refuse any LMB. The single phase broadcast covers both halves so the End-phase timer reads correctly on the client.
-2. **Lobby announcement (`END_TIME = 5s`)**: players are healed to MaxHealth, ForceFields are stripped, everyone is teleported to lobby + set to `STATE_LOBBY`, and the map is unloaded. The winner banner remains visible in the lobby for the remaining 5s before the next `gameLoop` iteration broadcasts `PHASE_LOBBY`.
+1. **Arena freeze (`END_DELAY_TIME = 3s`)**: `CombatSystem.stop()` and `AbilitySystem.stop()` run first (this strips every `PlayerShield` ForceField), then every character's third-person weapon is detached, then every character gets an invisible `ForceField` named `RoundEndForceField` (belt-and-suspenders invincibility against any in-flight shot), and `RoundStateChanged(PHASE_END, END_DELAY_TIME + END_TIME, { winners, reason })` is broadcast **immediately**. Players are still standing in the arena, but combat mode deactivates client-side (phase ∉ {Reveal, Round}) so the crosshair hides and the meter disappears. The single phase broadcast covers both halves so the End-phase timer reads correctly on the client.
+2. **Lobby announcement (`END_TIME = 5s`)**: players are healed to MaxHealth, `RoundEndForceField`s are stripped, everyone is teleported to lobby + set to `STATE_LOBBY`, and the map is unloaded. The winner banner remains visible in the lobby for the remaining 5s before the next `gameLoop` iteration broadcasts `PHASE_LOBBY`.
 
-`endRound` is the function that orchestrates this — it stops systems → adds ForceFields → broadcasts `PHASE_END` (with the full 8s duration) → `task.wait(END_DELAY_TIME)` → heals + strips ForceFields + teleports + `setLobby` → unloads map → `task.wait(END_TIME)`.
+`endRound` is the function that orchestrates this: it stops systems → detaches weapons → adds ForceFields → broadcasts `PHASE_END` (with the full 8s duration) → `task.wait(END_DELAY_TIME)` → heals + strips ForceFields + teleports + `setLobby` → unloads map → `task.wait(END_TIME)`.
 
-The round does **not** end early when only one safe player remains — the timer must run out. A round only ends early if (a) every safe player is converted (`AllInfected`), or (b) the player count drops below `MIN_PLAYERS` (`Aborted`). When the timer runs out, **every** remaining safe player is a winner.
+## Pistol
 
-### Stages (within Round phase)
+Hitscan, third-person aiming, one press per shot (no hold-to-fire).
 
-The flamethrower (see "Fire Attack" below) is available to every burner for the entire round, in all three stages. Stages add **passive hazards** on top of it.
+- **Client**: on LMB, `CombatController` raycasts `Camera:ViewportPointToRay` at the viewport center out to `PISTOL_RANGE`, excluding the local character; the aim point is the hit position or the ray's far end. `direction = (aimPoint - Head.Position).Unit`, sent as `ShootRequest(Head.Position, direction)`. Client-side gates: state `Safe`, phase `Round`, shield not up, local `PISTOL_COOLDOWN` timer elapsed.
+- **Server** (`CombatSystem.shoot`): re-validates everything the client already checked, plus `PISTOL_ORIGIN_TOLERANCE` (rejects if the claimed origin is too far from the server-side head) and re-normalizes/validates `direction` as a finite, non-zero vector. Raycasts `origin → direction * PISTOL_RANGE`, excluding the shooter's character.
+- **Damage**: `PISTOL_DAMAGE` (100, one shot eliminates) applied only on a direct hit against another `Safe` player. A hit against a raised shield calls `breakShield` instead of dealing damage (see Shield below).
+- **Tracer**: on every accepted shot (hit or miss), the server spawns a thin anchored Neon `Part` named `PistolTracer` (`CanCollide`/`CanQuery`/`CanTouch` all false) from `origin` to the hit point (or `origin + direction * PISTOL_RANGE` on a miss), parented to `Workspace`, and destroys it after `PISTOL_TRACER_LIFETIME` via `Debris:AddItem`. Server-created parts replicate on their own: no remote needed.
+- **Cooldown**: `PISTOL_COOLDOWN` (1.0s) between shots, checked server-side with `PISTOL_COOLDOWN_TOLERANCE` (0.05s) slack for network jitter.
 
-| Stage | Duration | Behavior |
-|-------|----------|----------|
-| 1 (TAG) | 0–30s | Active flamethrower only — no passive hazards. Burners must aim and fire at safe players to do damage. |
-| 2 (TRAILS) | 30–60s | Adds: each burner leaves a continuous **fire wall** behind them. Tall (6 studs), thin Neon segments are dropped between successive foot positions whenever the burner moves at least `TRAIL_SEGMENT_MIN_LENGTH` studs. Walls last 5s and deal `HAZARD_DAMAGE_PER_SEC` (5 HP/s) to anything within `TRAIL_RADIUS` of the wall surface (≈ "touching it"). |
-| 3 (INFERNO) | 60–90s | Adds: anything a burner physically touches catches fire **for the rest of the round** (`IGNITE_RADIUS` = 5 studs, 5 HP/s) — ignited parts never extinguish until `endRound`. Does not apply to parts with a `Fireproof` `BoolValue` child set to `true`, or to player characters. |
+## Shield
 
-### Fire Attack (active flamethrower, all stages)
+Raise it with RMB; it blocks exactly one shot, then breaks.
 
-Burners aim with the camera and hold **LMB** to spew a cone of flame from their torso.
+- **Raising**: puts a native `ForceField` named `PlayerShield` (`Visible = true`) on the character and sets `Humanoid.WalkSpeed` to `SHIELD_WALKSPEED` (12, down from `SAFE_WALKSPEED` 16). Rejected if already up, on cooldown, the round isn't active, or the player isn't `Safe`. While the shield is up the player cannot shoot: the server rejects `ShootRequest` and the client doesn't even send it.
+- **Duration: shrinking re-raise**: a freshly raised shield lasts `SHIELD_DURATIONS[1]` (3.0s). Each time it's *broken* by an incoming shot (not lowered manually, not expired naturally), `breaksInChain` increments and the next raise uses `SHIELD_DURATIONS[1 + breaksInChain]` (clamped to the array, 1.0s after one break, 0.5s after two or more). The chain resets to 0 breaks once `os.clock() - lastBreakAt > SHIELD_CHAIN_RESET` (5.0s), so pressure only stays cheap if the defender keeps re-raising fast; a gap resets them to the full 3s shield.
+- **Natural expiry or manual lower**: either one removes the ForceField, restores `SAFE_WALKSPEED`, and starts `SHIELD_COOLDOWN` (3.0s) before the player can raise again: `ShieldChanged` fires `SHIELD_COOLDOWN_STATUS` immediately, then `SHIELD_READY` once the cooldown elapses.
+- **Break** (a landed shot hits a raised shield): the ForceField is removed immediately, `breaksInChain += 1`, `lastBreakAt = now`, and, critically, there is **no cooldown**. `ShieldChanged` fires `SHIELD_READY` right away, so the player can re-raise on the very next input, just with the shorter duration from the chain. `ShotBlocked` fires to both the shooter and the (former) shield holder.
+- The Heartbeat `step` in `CombatSystem` is what actually expires an up shield past `expiresAt` and clears a cooldown past `cooldownUntil`: both paths funnel through `lowerShield`/status broadcasts so the client meter always matches server state.
 
-- **Cone**: `FIRE_CONE_RANGE` (14 studs) long, `FIRE_CONE_HALF_ANGLE` (35°) half-angle. `InfectionSystem` precomputes the dot threshold (`cos(35°)`) once at module load and tests every safe player's HRP against `(burner.lookVector ⋅ toTarget.Unit)` each Heartbeat. Standing on top of the burner (distance < 0.001) always counts as in-cone.
-- **Damage**: `FIRE_DAMAGE_PER_SEC` (18 HP/s, ~5.5 seconds to drain a full health bar). Active fire takes priority over hazard damage in the per-tick check — a player in both a wall and a cone takes only the cone tick.
-- **Fuel**: `FIRE_FUEL_MAX` (3.0 seconds of continuous fire). Drains at 1.0/sec while firing; regenerates at `FIRE_FUEL_REGEN_PER_SEC` (1.0/sec) while not firing — i.e., 1:1 burn-to-recover. `FIRE_FUEL_MIN_TO_START` (0.3) prevents tap-spam at empty: a burner must let fuel recover above the threshold before they can re-trigger. Hitting 0 while firing force-stops the stream.
-- **Visual**: an `Attachment` named `FlameAttachment` is placed 2 studs in front of the torso (`UpperTorso` / `Torso` / `HumanoidRootPart` fallback), with a `ParticleEmitter` (`FlamethrowerStream`) and a `PointLight` (`FlamethrowerLight`) child. On stop, the emitter is disabled and destroyed 0.7s later so in-flight particles can taper out cleanly.
-- **Burner grace** still applies: `FireAttackSystem.getFiringBurners()` returns *all* firing burners; `InfectionSystem.step` then filters out burners whose `NEW_BURNER_GRACE` window hasn't elapsed.
+## Elimination
 
-### Conversion rule
-
-Players are **never killed**. When a safe player's HP reaches 0:
+Players are **never killed** in the Roblox sense. When a `Safe` player's HP reaches 0 from a landed shot:
 - HP is restored to `MaxHealth`.
-- `InfectionSystem.PlayerInfected` fires; `RoundManager.onPlayerInfected` calls `setBurning(player, withGrace=true)` and fires `KillFeed:FireAllClients(killerName, victimName)`.
-- `Humanoid.BreakJointsOnDeath` is set `false` on every spawn so a 0-HP frame never triggers ragdoll.
+- `CombatSystem.PlayerEliminated` fires `(victim, killer?)`.
+- `RoundManager.onPlayerEliminated`, gated to `currentPhase == PHASE_ROUND`, sets the victim to `STATE_LOBBY`, teleports them to the lobby (they spectate from there), and broadcasts `KillFeed(killerName?, victimName)`.
+- `Humanoid.BreakJointsOnDeath` is set `false` on every spawn so a 0-HP frame never triggers ragdoll or a death animation.
 
-The killer name is `nil` when the kill came from a hazard (trail/ignited part) — the kill feed renders that as `"Victim burned"` instead of `"Killer burned Victim"`. Cone damage from a firing burner attributes the kill to that burner.
+`killerName` is always present for a pistol elimination (cone/hazard kills don't exist in this mode); it's only `nil` in the remote's shape for forward-compatibility with `KillFeedController`'s no-killer text path.
 
-### Grace period
+## Visual identity
 
-A freshly converted burner gets `NEW_BURNER_GRACE` (1.0s) before they appear in the burner list, preventing instant-cascade infection.
-
-## Visual identity (per burner)
-
-Set up by `RoundManager.setBurning` on conversion and torn down by `setSafe`/`setLobby`:
-
-- **`BurnFire`** — `Fire` instance on the burner's torso (visible flames on the body).
-- **`BurnOutline`** — `Highlight` named `BurnOutline`, orange (`255,130,0`), `FillTransparency = 1` (outline-only), `DepthMode = AlwaysOnTop`. Lets safe players spot burners through walls.
-
-`FireSpreadSystem` adds these, only during stages 2/3:
-
-- **Fire-wall trail** — Stage 2+. Not parented to the burner; lives in `Workspace.FireHazards`. Each segment is a `Part` named `TrailWall` (Neon, orange, ~35% transparent) with a `WallFlame` `ParticleEmitter` child. New segments are produced from the heartbeat loop in `step` whenever the burner has moved at least `TRAIL_SEGMENT_MIN_LENGTH` from the last anchor. After `TRAIL_DURATION` the emitter is disabled and the part is destroyed `WALL_FADE_OUT` later so particles can finish.
-- **Touched listeners** — Stage 3 only. One per `BasePart` of the burner's character.
+- **Third-person weapon**: `RoundManager.setSafe` welds a clone of `ReplicatedStorage.Weapons.<VIEWMODEL_DEFAULT_WEAPON>` (named `EquippedWeapon`) onto the character's right arm via a `Motor6D`, using the grip `CFrame` and motor name read from the matching rig under `ReplicatedStorage.ThirdPersonRigs` (falls back to identity + `"Weapon"` if the rig/motor isn't found). `setLobby` and round end both detach it.
+- **Shield**: the `PlayerShield` ForceField itself is the only visual: see Shield above. No outline/highlight system exists in this mode (there's no "who's the burner" to call out; everyone looks the same).
 
 ## Map Authoring
 
@@ -147,54 +138,43 @@ Maps live in `ServerStorage.Maps` (each is a `Model`). At runtime they are clone
 Required structure inside each map Model:
 - `SpawnPoints/` folder containing `BasePart`s named `SpawnPoint`.
 
-For Stage 3 to behave correctly, **mark any part that should NOT catch fire** by parenting a `BoolValue` named `Fireproof` (with `Value = true`) under it (typically: ground, walls, large terrain). Parts without that child will ignite when a burner touches them. This is opt-out by design — most props should burn.
-
-## Hazard System
-
-`FireSpreadSystem` creates two kinds of damage hazards, both registered with `InfectionSystem.registerHazard(part, radius)`:
-
-- **Trail walls** — visible Neon orange `TrailWall` parts in `Workspace.FireHazards`. Both the visual and the damage hitbox.
-- **Ignited parts** — six `BurnFlames_<Face>` `ParticleEmitter`s parented directly to the touched map part (one per `NormalId`: Top/Bottom/Front/Back/Left/Right) so flames cover **every face** of the object, not just the centre or the top. Each emitter's `Rate` is scaled by that face's area (clamped 6–80). Ignited parts **never self-extinguish** — they keep burning until `FireSpreadSystem.stop()` is called at round end, which removes the emitters and unregisters the hazards. The part itself is left intact.
-
-Both deal `HAZARD_DAMAGE_PER_SEC` (half of direct burner damage). `InfectionSystem` measures distance from the **closest point on the hazard's bounding box** to the player's HRP, so long wall segments damage along their full length, not just near their center. Direct burner contact takes priority over hazards in the damage check.
-
-`FireSpreadSystem.stop()` (called from `endRound`) destroys the hazard folder, clears any lingering ignited fires from map geometry, and detaches all Touched listeners.
+A `Fireproof` `BoolValue` child no longer means anything: there's no touch-ignition system in this mode, so it's safe to leave on old map geometry or remove.
 
 ## Rojo & Project Config
 
 `default.project.json`:
-- No `Baseplate` is defined — sync does not re-create one.
+- No `Baseplate` is defined: sync does not re-create one.
 - `$ignoreUnknownInstances: true` is set on the DataModel root, `Workspace`, `StarterPlayer`, `Lighting`, `SoundService`. All folder-mapped services have the same flag in their `init.meta.json`. **Anything you build in Studio that isn't in source is preserved across syncs** (Remotes folder, Maps, Lobby, GUI assets, etc.).
-- Files that *are* in source remain authoritative — Studio edits to those will be overwritten on next sync.
+- Files that *are* in source remain authoritative: Studio edits to those will be overwritten on next sync.
 
 ## Conventions
 
 - New tunables go in `Constants.luau`. Don't hardcode magic numbers in systems.
-- New cross-system signals: prefer `BindableEvent` over polling. Existing examples: `PlayerState.StateChanged`, `InfectionSystem.PlayerInfected`.
-- Server creates Workspace instances; they replicate to clients automatically. No remote needed for visual effects.
+- New cross-system signals: prefer `BindableEvent` over polling. Existing examples: `PlayerState.StateChanged`, `CombatSystem.PlayerEliminated`.
+- Server creates Workspace instances; they replicate to clients automatically. No remote needed for visual effects (see the pistol tracer).
 - Per-frame work goes through `RunService.Heartbeat` (server) or `RenderStepped` (client).
-- Phase changes broadcast via the existing `RoundStateRemote` `extra` payload — add fields rather than creating new remotes for round metadata.
-- Need a new RemoteEvent? Use the `ensureRemote(parent, name)` pattern at the top of any server module (`FireAttackSystem`, `InfectionSystem`, `RoundManager` all do this) — it returns the existing remote if present, else creates one. Don't rely on Studio-authored remotes for new functionality.
+- Phase changes broadcast via the existing `RoundStateRemote` `extra` payload: add fields rather than creating new remotes for round metadata.
+- Need a new RemoteEvent? Use the `ensureRemote(parent, name)` pattern at the top of `CombatSystem.luau`: it returns the existing remote if present, else creates one. Don't rely on Studio-authored remotes for new functionality.
 - UI text colors: use `colorize(color, text)` helper in `UIController` to wrap text in RichText `<font>` tags. Both labels have `RichText = true` set automatically on first resolve.
-- Cosmetic-only client feedback (sounds, screen shake, vignette, damage numbers) belongs in `CombatFeedbackController` — driven by `DamageDealt` / `DamageTaken` / `KillFeed` remotes. Don't add gameplay logic here; if a feature needs server authority, route it through the existing remotes instead.
+- Cosmetic-only client feedback (sounds, screen shake, vignette, damage numbers) belongs in `CombatFeedbackController`: driven by `DamageDealt` / `DamageTaken` / `KillFeed` / `ShotBlocked` remotes. Don't add gameplay logic here; if a feature needs server authority, route it through the existing remotes instead.
 
 ## Testing
 
-In Studio, use **Test → Local Server → 2 Players** for end-to-end testing. To shorten iteration, temporarily lower `STAGE_DURATION` and `ROUND_TIME` in `Constants.luau`.
+In Studio, use **Test → Local Server → 2 Players** for end-to-end testing. To shorten iteration, temporarily lower `ROUND_TIME` in `Constants.luau`.
 
 Quick smoke checklist after changes:
-1. After intermission, the `Role` frame pops up (UIScale entrance), `ROLE` cycles SURVIVOR (green) ↔ TAGGER (red), settles on the correct role per player, fades out. Status / secondary banners are blank during this window. Burner stays in third-person during the animation.
-2. After the role reveal fades out, the 10s positioning window begins. Status shows "<NAME> IS BURNING!", secondary shows "Position yourself! 10s". The burner's custom crosshair appears at this point; the camera stays third-person and the mouse stays unlocked. Pressing Q does **not** dash; LMB does **not** spawn a flame stream **and the crosshair does NOT animate** (no size/color change) — it must mirror the (absent) flame stream.
-3. Round starts, Status frame shows "STAGE 1/3 — TAG" → "STAGE 2/3 — TRAILS" → "STAGE 3/3 — INFERNO" at the right times (color shifts yellow → orange → red). Dash and flamethrower work normally; the crosshair grows + reds **at the same instant** the flame begins emitting and shrinks back **at the same instant** it stops (including auto-stop on fuel exhaustion).
-4. Secondary frame shows `1:30  |  2/3` (timer flips red below 30s; alive count excludes self).
-5. As a burner, holding LMB spawns a flame cone in front of the torso, drains the `FuelMeter` bar over ~3s, and force-stops at 0; releasing LMB regens the bar at the same rate. Cone-tagging a safe player drains their HP per `FIRE_DAMAGE_PER_SEC`.
-6. As a victim, taking damage shows a vignette pulse + light camera shake; the screen does NOT shake while you're not being hit. Damage numbers stream out over the victim's head every ~0.25s while damage is landing.
-7. HP hitting 0 swaps the player to burning — no death animation, no respawn. Kill feed shows `"Killer burned Victim"` for cone kills, `"Victim burned"` for hazard kills.
-8. Stage 2: tall fire walls trail behind moving burners and stay around for ~5 seconds; safe players who walk into one take ~5 HP/s. A safe player simultaneously in a wall AND a cone takes the cone tick, not both.
-9. Stage 3: burner brushes a prop → prop ignites with flames visible on **every face** and stays burning for the rest of the round; brushes a wall with a `Fireproof` `BoolValue` child (`Value = true`) → nothing.
-10. All burners visibly outlined orange (visible through walls). The `FuelMeter` is hidden for safe players and visible for burners.
-11. **Get multiple kills in quick succession (≤ 3s apart)**: the `KillConfirm` banner does NOT cancel the previous one. New banners stack above the most recent (configurable via `STACK_DIRECTION`); each banner runs its own independent expand/hold/collapse. Beyond `MAX_STACK = 5` the oldest is evicted cleanly. Older banners shift back down to fill in as they age out.
-12. Round end (timer expiry, all-infected, or aborted): immediately on end, the burner's crosshair drops, abilities and tagging are dead, and players hold their final positions in the arena for **3 seconds** (`END_DELAY_TIME`) — invincible (a `RoundEndForceField` is parented to each character). Then everyone snaps to the lobby at full HP, the map disappears (`Workspace.LoadedMap` gone, all trail walls / ignited fires / hazard folder / flame attachments / ForceFields removed), and the winner banner remains for `END_TIME = 5s` more. The `Role` frame is hidden.
-13. Start a second round: dash works once STAGE 1 begins (no stale cooldown carrying from the previous round).
+1. After intermission, the 10s Reveal countdown begins: Status shows "GET READY!", secondary shows a positioning countdown. LMB does not fire a shot (no tracer, no `DamageDealt`/`DamageTaken`), RMB does not raise a shield, and Q does not dash: the `FuelMeter` (shield meter) is visible but stays full and idle.
+2. Round starts: Status switches to "LAST ONE STANDING", secondary shows `1:30  |  N/N` (timer flips red below 30s; alive count excludes self).
+3. LMB fires a hitscan shot toward screen center: a short tracer part appears from the shooter to the hit point (or out to `PISTOL_RANGE` on a miss), the crosshair punches once, and a second LMB press within `PISTOL_COOLDOWN` (1s) does nothing until it elapses.
+4. RMB raises a shield: a visible `ForceField` appears on the character, WalkSpeed drops, and the meter starts draining from full over 3s. Shooting is refused while it's up (server rejects, no `DamageDealt`).
+5. A shot lands on a raised shield: the shield breaks immediately (ForceField gone), `ShotBlocked` fires for both players (feedback sound), and the meter goes instantly to Ready (full, no cooldown wait): raising again right away gives a visibly shorter shield (1s, then 0.5s on a second break within `SHIELD_CHAIN_RESET`).
+6. Manually lowering a shield (RMB while up) or letting one expire naturally both start a 3s cooldown: the meter empties and refills over that window with `EmptyOverlay` visible, and raising is refused until it completes.
+7. A landed unblocked shot eliminates in one hit: HP resets to max (no death animation), the victim is moved to `STATE_LOBBY` and teleported to the lobby, `KillFeed` shows `"<Killer> shot <Victim>"`, and the `ChangeIndicator` banner ("ELIMINATED" / "SPECTATING") plays for the victim if other players are still `Safe`.
+8. As a victim taking damage, a vignette pulse + light camera shake fire; the screen does NOT shake while not being hit. Damage numbers stream above the victim's head.
+9. Reduce to the last two players and eliminate one: the round ends immediately with `REASON_LAST_STANDING` - no need to wait for the timer - and the survivor is the sole winner.
+10. Let the round timer run out with multiple players still `Safe`: the round ends with `REASON_SURVIVED` and every remaining `Safe` player is listed as a winner (1 / 2 / `N PLAYERS SURVIVED!` formats on the banner).
+11. Round end (last-standing, timer, or aborted): immediately, the crosshair and shield meter disappear, shooting/shield/dash are dead, and players hold their final positions in the arena for **3 seconds** (`END_DELAY_TIME`), invincible (`RoundEndForceField` parented to each character). Then everyone snaps to the lobby at full HP, the map disappears (`Workspace.LoadedMap` gone, all `PlayerShield`/`RoundEndForceField`/`EquippedWeapon` instances removed), and the winner banner remains for `END_TIME = 5s` more.
+12. **Get multiple kills in quick succession (≤ 3s apart)**: the `KillConfirm` banner does NOT cancel the previous one. New banners stack above the most recent (configurable via `STACK_DIRECTION`); each banner runs its own independent expand/hold/collapse. Beyond `MAX_STACK = 5` the oldest is evicted cleanly.
+13. Start a second round: dash works immediately once `Round` begins (no stale cooldown carrying from the previous round), and the shield chain/cooldown state is reset for everyone (`CombatSystem.start()` clears it).
 
-If you start the server and immediately hear the intermission countdown loop forever, check Output for `MapManager: ServerStorage.Maps ...` warnings — that's the cause.
+If you start the server and immediately hear the intermission countdown loop forever, check Output for `MapManager: ServerStorage.Maps ...` warnings: that's the cause.
