@@ -3,6 +3,8 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local TweenService = game:GetService("TweenService")
 local SoundService = game:GetService("SoundService")
+local UserInputService = game:GetService("UserInputService")
+local Workspace = game:GetService("Workspace")
 
 local Constants = require(ReplicatedStorage.Shared.Constants)
 local CombatController = require(script.Parent.CombatController)
@@ -93,6 +95,12 @@ local CROSSHAIR_IDLE_TRANSPARENCY = 0.5
 local CROSSHAIR_PUNCH_TRANSPARENCY = 0
 local CROSSHAIR_TWEEN_TIME = 0.12
 
+local function getLocalHumanoid(): Humanoid?
+	local char = localPlayer.Character
+	if not char then return nil end
+	return char:FindFirstChildOfClass("Humanoid")
+end
+
 local localState: string = Constants.STATE_LOBBY
 local combatModeActive = false
 local currentPhase: string = Constants.PHASE_LOBBY
@@ -123,11 +131,33 @@ local function punchCrosshair()
 	):Play()
 end
 
+-- Forced shift lock: mouse pinned to the crosshair, character yaw follows the camera.
+local function applyMouseLock(active: boolean)
+	UserInputService.MouseBehavior = if active then Enum.MouseBehavior.LockCenter else Enum.MouseBehavior.Default
+	local hum = getLocalHumanoid()
+	if hum then
+		hum.AutoRotate = not active
+	end
+end
+
+local function faceCameraStep()
+	local camera = Workspace.CurrentCamera
+	local char = localPlayer.Character
+	if not camera or not char then return end
+	local root = char:FindFirstChild("HumanoidRootPart") :: BasePart?
+	if not root then return end
+	local look = camera.CFrame.LookVector
+	local flat = Vector3.new(look.X, 0, look.Z)
+	if flat.Magnitude < 0.001 then return end
+	root.CFrame = CFrame.lookAt(root.Position, root.Position + flat.Unit)
+end
+
 local function setCombatMode(active: boolean)
 	resetCrosshair()
 	if crosshair then
 		crosshair.Visible = active
 	end
+	applyMouseLock(active)
 end
 
 
@@ -258,12 +288,6 @@ local function checkHpThresholds(currentHP: number)
 	lastKnownHP = currentHP
 end
 
-local function getLocalHumanoid(): Humanoid?
-	local char = localPlayer.Character
-	if not char then return nil end
-	return char:FindFirstChildOfClass("Humanoid")
-end
-
 local function shake(intensity: number)
 	shakeIntensity = math.max(shakeIntensity, intensity)
 end
@@ -272,15 +296,17 @@ local function shakeStep(dt: number)
 	local hum = getLocalHumanoid()
 	if not hum then return end
 
+	local base = if combatModeActive then Constants.SHOULDER_CAMERA_OFFSET else Vector3.new()
+
 	if shakeIntensity <= 0.001 then
-		if hum.CameraOffset.Magnitude > 0.001 then
-			hum.CameraOffset = Vector3.new()
+		if (hum.CameraOffset - base).Magnitude > 0.001 then
+			hum.CameraOffset = base
 		end
 		return
 	end
 
 	local i = shakeIntensity
-	hum.CameraOffset = Vector3.new(
+	hum.CameraOffset = base + Vector3.new(
 		(math.random() - 0.5) * 2 * i,
 		(math.random() - 0.5) * 2 * i,
 		(math.random() - 0.5) * 2 * i
@@ -339,9 +365,13 @@ local function onShotBlocked(_other: Player?)
 	playSound(SOUND_IDS.shotBlocked, 0.8)
 end
 
-local function onCharacterAdded(_char: Model)
+local function onCharacterAdded(char: Model)
 	lastKnownHP = math.huge
 	shakeIntensity = 0
+	local hum = char:WaitForChild("Humanoid", 5)
+	if hum and hum:IsA("Humanoid") then
+		hum.AutoRotate = not combatModeActive
+	end
 end
 
 local function reconcileCombatMode()
@@ -388,6 +418,10 @@ function CombatFeedbackController.init()
 	end
 
 	RunService.RenderStepped:Connect(function(dt)
+		if combatModeActive then
+			UserInputService.MouseBehavior = Enum.MouseBehavior.LockCenter
+			faceCameraStep()
+		end
 		shakeStep(dt)
 		sizzleStep(dt)
 		damageNumberStep(dt)

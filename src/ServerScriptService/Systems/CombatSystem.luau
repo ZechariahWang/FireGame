@@ -163,6 +163,7 @@ local function breakShield(victim: Player, shooter: Player)
 	s.lastBreakAt = os.clock()
 
 	sendShieldStatus(victim, Constants.SHIELD_READY, 0, s.breaksInChain)
+	playSoundAt(getHead(victim), Constants.SHIELD_BLOCK_SOUND)
 
 	if ShotBlockedRemote then
 		ShotBlockedRemote:FireClient(shooter, victim)
@@ -173,6 +174,21 @@ end
 local function clearShieldSilently(player: Player)
 	removeShieldPart(player)
 	shields[player] = newShieldState()
+end
+
+local function playSoundAt(part: BasePart?, soundId: string)
+	if not part or soundId == "" then return end
+	local sound = Instance.new("Sound")
+	sound.SoundId = soundId
+	sound.Parent = part
+	sound:Play()
+	Debris:AddItem(sound, Constants.SOUND_CLEANUP_TIME)
+end
+
+local function getHead(player: Player): BasePart?
+	local char = player.Character
+	if not char then return nil end
+	return char:FindFirstChild("Head") :: BasePart?
 end
 
 local function spawnTracer(origin: Vector3, endPoint: Vector3)
@@ -259,6 +275,7 @@ local function shoot(shooter: Player, origin: any, direction: any)
 	local result = Workspace:Raycast(origin, aim * Constants.PISTOL_RANGE, params)
 	local endPoint = if result then result.Position else origin + aim * Constants.PISTOL_RANGE
 	spawnTracer(origin, endPoint)
+	playSoundAt(head, Constants.PISTOL_SHOT_SOUND)
 
 	if not result then return end
 

@@ -49,7 +49,7 @@ local function resolveElements()
 	local gameGui = playerGui:FindFirstChild("Game")
 	if not gameGui then return end
 
-	local fm = gameGui:FindFirstChild("FuelMeter")
+	local fm = gameGui:FindFirstChild("ShieldMeter") or gameGui:FindFirstChild("FuelMeter")
 	if not fm or not fm:IsA("GuiObject") then return end
 	container = fm
 

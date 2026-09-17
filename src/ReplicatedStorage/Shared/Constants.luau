@@ -15,15 +15,19 @@ Constants.PISTOL_RANGE = 200              -- studs
 Constants.PISTOL_DAMAGE = 100             -- one shot eliminates
 Constants.PISTOL_ORIGIN_TOLERANCE = 8     -- studs; max distance between client-reported origin and the head
 Constants.PISTOL_TRACER_LIFETIME = 0.08   -- seconds the tracer part stays in Workspace
+Constants.PISTOL_SHOT_SOUND = "rbxassetid://127604219525464"  -- played at the shooter's head, server side
+Constants.SHIELD_BLOCK_SOUND = "rbxassetid://9116669121"     -- played at the victim's head when a shield absorbs a shot
+Constants.SOUND_CLEANUP_TIME = 3          -- seconds before a one-shot Sound instance is removed
 
 -- SHIELD
-Constants.SHIELD_DURATIONS = { 3.0, 1.0, 0.5 } -- active seconds; index = 1 + breaks in the current chain (clamped)
+Constants.SHIELD_DURATIONS = { 1.0, 0.5, 0.25 } -- active seconds; index = 1 + breaks in the current chain (clamped)
 Constants.SHIELD_COOLDOWN = 3.0           -- after natural expiry or manual lower. A break has no cooldown.
 Constants.SHIELD_CHAIN_RESET = 5.0        -- seconds since the last break before the chain resets to full duration
 Constants.SHIELD_WALKSPEED = 12           -- while the shield is up
 
 -- MOVEMENT
 Constants.SAFE_WALKSPEED = 16
+Constants.SHOULDER_CAMERA_OFFSET = Vector3.new(1.75, 0, 0) -- shift-lock style over-the-shoulder offset during combat
 Constants.MOVEMENT_STRIDE_LENGTH = 1.6        -- studs of horizontal foot drift before a swing fires
 Constants.MOVEMENT_STEP_HEIGHT = 0.55         -- peak vertical arc of a swinging foot
 Constants.MOVEMENT_STEP_TIME = 0.18           -- seconds per swing
