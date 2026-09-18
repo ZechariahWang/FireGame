@@ -281,17 +281,15 @@ local function shakeStep(dt: number)
 	local hum = getLocalHumanoid()
 	if not hum then return end
 
-	local base = if combatModeActive then Constants.SHOULDER_CAMERA_OFFSET else Vector3.new()
-
 	if shakeIntensity <= 0.001 then
-		if (hum.CameraOffset - base).Magnitude > 0.001 then
-			hum.CameraOffset = base
+		if hum.CameraOffset.Magnitude > 0.001 then
+			hum.CameraOffset = Vector3.zero
 		end
 		return
 	end
 
 	local i = shakeIntensity
-	hum.CameraOffset = base + Vector3.new(
+	hum.CameraOffset = Vector3.new(
 		(math.random() - 0.5) * 2 * i,
 		(math.random() - 0.5) * 2 * i,
 		(math.random() - 0.5) * 2 * i

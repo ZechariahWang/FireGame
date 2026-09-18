@@ -27,7 +27,6 @@ Constants.SHIELD_WALKSPEED = 12           -- while the shield is up
 
 -- MOVEMENT
 Constants.SAFE_WALKSPEED = 16
-Constants.SHOULDER_CAMERA_OFFSET = Vector3.new(1.75, 0, 0) -- shift-lock style over-the-shoulder offset during combat
 Constants.MOVEMENT_STRIDE_LENGTH = 1.6        -- studs of horizontal foot drift before a swing fires
 Constants.MOVEMENT_STEP_HEIGHT = 0.55         -- peak vertical arc of a swinging foot
 Constants.MOVEMENT_STEP_TIME = 0.18           -- seconds per swing
