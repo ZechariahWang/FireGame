@@ -4,7 +4,7 @@ local RunService = game:GetService("RunService")
 local TweenService = game:GetService("TweenService")
 local SoundService = game:GetService("SoundService")
 local UserInputService = game:GetService("UserInputService")
-local Workspace = game:GetService("Workspace")
+local GuiService = game:GetService("GuiService")
 
 local Constants = require(ReplicatedStorage.Shared.Constants)
 local CombatController = require(script.Parent.CombatController)
@@ -131,25 +131,11 @@ local function punchCrosshair()
 	):Play()
 end
 
--- Forced shift lock: mouse pinned to the crosshair, character yaw follows the camera.
-local function applyMouseLock(active: boolean)
-	UserInputService.MouseBehavior = if active then Enum.MouseBehavior.LockCenter else Enum.MouseBehavior.Default
-	local hum = getLocalHumanoid()
-	if hum then
-		hum.AutoRotate = not active
-	end
-end
-
-local function faceCameraStep()
-	local camera = Workspace.CurrentCamera
-	local char = localPlayer.Character
-	if not camera or not char then return end
-	local root = char:FindFirstChild("HumanoidRootPart") :: BasePart?
-	if not root then return end
-	local look = camera.CFrame.LookVector
-	local flat = Vector3.new(look.X, 0, look.Z)
-	if flat.Magnitude < 0.001 then return end
-	root.CFrame = CFrame.lookAt(root.Position, root.Position + flat.Unit)
+local function crosshairFollowStep()
+	if not crosshair then return end
+	local mouse = UserInputService:GetMouseLocation()
+	local inset = if screenGui.IgnoreGuiInset then Vector2.zero else GuiService:GetGuiInset()
+	crosshair.Position = UDim2.fromOffset(mouse.X - inset.X, mouse.Y - inset.Y)
 end
 
 local function setCombatMode(active: boolean)
@@ -157,7 +143,6 @@ local function setCombatMode(active: boolean)
 	if crosshair then
 		crosshair.Visible = active
 	end
-	applyMouseLock(active)
 end
 
 
@@ -368,10 +353,6 @@ end
 local function onCharacterAdded(char: Model)
 	lastKnownHP = math.huge
 	shakeIntensity = 0
-	local hum = char:WaitForChild("Humanoid", 5)
-	if hum and hum:IsA("Humanoid") then
-		hum.AutoRotate = not combatModeActive
-	end
 end
 
 local function reconcileCombatMode()
@@ -419,8 +400,7 @@ function CombatFeedbackController.init()
 
 	RunService.RenderStepped:Connect(function(dt)
 		if combatModeActive then
-			UserInputService.MouseBehavior = Enum.MouseBehavior.LockCenter
-			faceCameraStep()
+			crosshairFollowStep()
 		end
 		shakeStep(dt)
 		sizzleStep(dt)

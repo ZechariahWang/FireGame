@@ -122,8 +122,8 @@ local function getAimDirection(headPosition: Vector3): Vector3?
 	local camera = Workspace.CurrentCamera
 	if not camera then return nil end
 
-	local viewport = camera.ViewportSize
-	local ray = camera:ViewportPointToRay(viewport.X / 2, viewport.Y / 2)
+	local mouse = UserInputService:GetMouseLocation()
+	local ray = camera:ViewportPointToRay(mouse.X, mouse.Y)
 
 	local params = RaycastParams.new()
 	params.FilterType = Enum.RaycastFilterType.Exclude
